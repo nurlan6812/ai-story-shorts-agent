@@ -1,0 +1,75 @@
+{
+  "name": "casual",
+  "description": "친구에게 수다떠는 듯한 가벼운 톤, 일상 유머",
+
+  "layout": {
+    "type": "three_zone",
+    "header_height": 0.24,
+    "header_bg_color": [247, 231, 195],
+    "bottom_height": 0.25,
+    "bottom_bg_color": [249, 226, 158]
+  },
+
+  "label": {
+    "show": true,
+    "text": "ㅋㅋㅋ썰",
+    "font_size": 62,
+    "color": [255, 255, 255],
+    "bg_color": [226, 135, 63],
+    "y_offset": 10
+  },
+
+  "title": {
+    "show": true,
+    "font_size": 90,
+    "color": [40, 35, 30],
+    "align": "center",
+    "bg": "none",
+    "stroke_width": 0.5,
+    "stroke_color": [40, 35, 30],
+    "top_gap": 24
+  },
+
+  "subtitle": {
+    "show": true,
+    "font_size": 48,
+    "color": [120, 95, 60],
+    "stroke_width": 0,
+    "stroke_color": [0, 0, 0],
+    "gap_before": 52
+  },
+
+  "narration": {
+    "show": true,
+    "font_size": 68,
+    "color": [255, 255, 255],
+    "bg": "clean_box",
+    "bg_color": [225, 192, 108, 245],
+    "border_width": 3,
+    "border_color": [190, 158, 60],
+    "shadow_offset": 6,
+    "shadow_color": [0, 0, 0, 50],
+    "stroke_width": 6,
+    "stroke_color": [40, 30, 10],
+    "guide": "친구에게 수다떠는 듯한 편한 반말. ㅋㅋ, 아니 진짜, 대박 등 자연스러운 감탄사 포함. 짧고 리듬감 있게."
+  },
+
+  "image": {
+    "prompt_prefix": "bright cheerful cute cartoon illustration, kawaii webtoon style, warm colorful tones, expressive characters",
+    "prompt_suffix": "no overlay captions, no watermark, clean simple design, warm beige and orange color palette"
+  },
+
+  "motion": {
+    "camera": ["zoom_in", "static", "pan_left"],
+    "zoom_range": [1.0, 1.06],
+    "transitions": ["fade", "slide_left"],
+    "scene_duration": "3-5초",
+    "fade_duration": 0.4
+  },
+
+  "audio": {
+    "bgm_mood": "funny",
+    "bgm_volume": 0.18,
+    "effect_volume": 0.7
+  }
+}

@@ -1,0 +1,78 @@
+{
+  "name": "storytelling",
+  "description": "분위기 있는 이야기꾼 톤, 몰입감 있는 사연/무서운 이야기",
+
+  "layout": {
+    "type": "split",
+    "header_height": 0.23,
+    "header_bg_color": [30, 30, 52],
+    "header_top_padding": 55
+  },
+
+  "label": {
+    "show": true,
+    "text": "실화 사연",
+    "font_size": 52,
+    "color": [255, 255, 255],
+    "bg_color": [110, 60, 175],
+    "position": "pill",
+    "letter_spacing": 0,
+    "border_radius": 14,
+    "label_x": 50,
+    "shadow_offset": 4,
+    "shadow_color": [0, 0, 0, 140]
+  },
+
+  "title": {
+    "show": true,
+    "font_size": 82,
+    "color": [245, 245, 245],
+    "align": "left",
+    "bg": "none",
+    "stroke_width": 3,
+    "stroke_color": [0, 0, 0],
+    "shadow_offset": 4,
+    "shadow_color": [0, 0, 0, 140]
+  },
+
+  "subtitle": {
+    "show": true,
+    "font_size": 46,
+    "color": [160, 160, 180],
+    "stroke_width": 0,
+    "stroke_color": [0, 0, 0],
+    "gap_before": 20,
+    "shadow_offset": 4,
+    "shadow_color": [0, 0, 0, 140]
+  },
+
+  "narration": {
+    "show": true,
+    "font_size": 52,
+    "color": [255, 255, 255],
+    "bg": "dark_box",
+    "bg_color": [10, 10, 20, 210],
+    "stroke_width": 2,
+    "stroke_color": [0, 0, 0],
+    "guide": "이야기꾼 톤의 차분한 존댓말. 몰입감 있게 천천히 풀어가되, 핵심 장면에서 템포 변화. '그런데요, 여기서 반전이 있습니다' 같은 전환."
+  },
+
+  "image": {
+    "prompt_prefix": "cinematic dark illustration, dramatic moody lighting, atmospheric noir tones, detailed digital painting style",
+    "prompt_suffix": "no overlay captions, no watermark, dark navy and muted tones, illustration style"
+  },
+
+  "motion": {
+    "camera": ["zoom_in", "pan_up", "static"],
+    "zoom_range": [1.0, 1.08],
+    "transitions": ["fade", "zoom"],
+    "scene_duration": "4-6초",
+    "fade_duration": 0.6
+  },
+
+  "audio": {
+    "bgm_mood": "emotional",
+    "bgm_volume": 0.18,
+    "effect_volume": 0.7
+  }
+}

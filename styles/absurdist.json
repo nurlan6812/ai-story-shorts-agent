@@ -1,0 +1,80 @@
+{
+  "name": "absurdist",
+  "description": "황당하고 과장된 리액션, 초현실적 유머",
+
+  "layout": {
+    "type": "three_zone",
+    "header_height": 0.215,
+    "header_bg_color": [250, 197, 87],
+    "header_top_padding": 45,
+    "bottom_height": 0.28,
+    "bottom_bg_color": [255, 255, 255],
+    "image_top_gap": 58,
+    "image_padding_x": 30,
+    "image_border_width": 3,
+    "image_border_color": [180, 160, 140],
+    "image_border_radius": 10
+  },
+
+  "label": {
+    "show": true,
+    "text": "레전드 썰",
+    "font_size": 44,
+    "color": [60, 50, 40],
+    "bg_color": [225, 155, 45],
+    "position": "pill_center",
+    "letter_spacing": 0,
+    "border_radius": 22,
+    "pill_pad_h": 32,
+    "pill_pad_v": 18
+  },
+
+  "title": {
+    "show": true,
+    "font_size": 82,
+    "color": [25, 25, 25],
+    "align": "center",
+    "bg": "none",
+    "stroke_width": 0,
+    "stroke_color": [0, 0, 0]
+  },
+
+  "subtitle": {
+    "show": true,
+    "font_size": 46,
+    "color": [100, 85, 55],
+    "stroke_width": 0,
+    "stroke_color": [0, 0, 0],
+    "gap_before": 20
+  },
+
+  "narration": {
+    "show": true,
+    "font_size": 72,
+    "color": [30, 25, 20],
+    "bg": "clean_box",
+    "bg_color": [254, 219, 138, 230],
+    "stroke_width": 0,
+    "stroke_color": [0, 0, 0],
+    "guide": "황당하고 과장된 반말. 놀라는 리액션 크게. '아니 이게 말이 돼?!', '진짜 미쳤다 ㅋㅋㅋ' 같은 과장된 감탄. 에너지 높게."
+  },
+
+  "image": {
+    "prompt_prefix": "webtoon style cartoon illustration, exaggerated facial expressions, warm vivid colors, humorous situation",
+    "prompt_suffix": "no overlay captions, no watermark, clean composition, warm yellow and coral color palette"
+  },
+
+  "motion": {
+    "camera": ["zoom_in", "zoom_out", "pan_left", "pan_right"],
+    "zoom_range": [1.0, 1.1],
+    "transitions": ["slide_left", "zoom", "fade"],
+    "scene_duration": "2-4초",
+    "fade_duration": 0.3
+  },
+
+  "audio": {
+    "bgm_mood": "quirky",
+    "bgm_volume": 0.2,
+    "effect_volume": 0.8
+  }
+}

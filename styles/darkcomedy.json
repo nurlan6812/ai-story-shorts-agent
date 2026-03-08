@@ -1,0 +1,75 @@
+{
+  "name": "darkcomedy",
+  "description": "건조하고 시니컬한 톤, 블랙유머와 아이러니",
+
+  "layout": {
+    "type": "split",
+    "header_height": 0.23,
+    "header_top_padding": 55,
+    "header_bg_color": [30, 30, 30],
+    "bottom_blur": 20,
+    "bottom_blur_alpha": 50,
+    "bottom_blur_height": 0.25
+  },
+
+  "label": {
+    "show": true,
+    "text": "블랙유머",
+    "font_size": 48,
+    "color": [255, 255, 255],
+    "bg_color": [65, 65, 65],
+    "position": "pill",
+    "letter_spacing": 0,
+    "label_x": 50,
+    "border_radius": 12
+  },
+
+  "title": {
+    "show": true,
+    "font_size": 92,
+    "color": [240, 240, 240],
+    "align": "left",
+    "bg": "none",
+    "stroke_width": 0,
+    "stroke_color": [0, 0, 0]
+  },
+
+  "subtitle": {
+    "show": true,
+    "font_size": 46,
+    "color": [170, 170, 175],
+    "stroke_width": 0,
+    "stroke_color": [0, 0, 0],
+    "gap_before": 20
+  },
+
+  "narration": {
+    "show": true,
+    "font_size": 55,
+    "color": [255, 255, 255],
+    "bg": "dark_box",
+    "bg_color": [0, 0, 0, 230],
+    "stroke_width": 0,
+    "stroke_color": [0, 0, 0],
+    "guide": "건조하고 시니컬한 반말. 감정 없이 담담하게 설명하되, 상황의 아이러니를 부각. '네, 그렇습니다. 실화입니다.' 같은 건조한 리액션."
+  },
+
+  "image": {
+    "prompt_prefix": "dark noir manhwa illustration, muted desaturated colors, gritty atmospheric, sharp lines",
+    "prompt_suffix": "no overlay captions, no watermark, dark charcoal and gray tones, webtoon noir aesthetic"
+  },
+
+  "motion": {
+    "camera": ["static", "zoom_in", "pan_right"],
+    "zoom_range": [1.0, 1.05],
+    "transitions": ["fade"],
+    "scene_duration": "3-5초",
+    "fade_duration": 0.5
+  },
+
+  "audio": {
+    "bgm_mood": "tension",
+    "bgm_volume": 0.15,
+    "effect_volume": 0.6
+  }
+}

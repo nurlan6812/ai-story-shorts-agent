@@ -1,0 +1,83 @@
+{
+  "name": "wholesome",
+  "description": "부드럽고 따뜻한 톤, 감동과 힐링 이야기",
+  "font_family": "Paperlogy-7Bold.ttf",
+
+
+  "layout": {
+    "type": "three_zone",
+    "header_height": 0.25,
+    "header_top_padding": 55,
+    "header_bg_color": [255, 255, 255],
+    "header_top_bar_color": [205, 190, 230],
+    "header_top_bar_height": 140,
+        "bottom_height": 0.25,
+    "bottom_bg_color": [226, 214, 235],
+    "bottom_blur": 25,
+    "bottom_blur_alpha": 20
+  },
+
+  "label": {
+    "show": true,
+    "text": "눈물주의",
+    "font_size": 42,
+    "color": [55, 30, 75],
+    "bg_color": [205, 190, 230],
+    "position": "pill_center"
+  },
+
+  "title": {
+    "show": true,
+    "font_family": "Binggrae-Bold.ttf",
+    "font_size": 86,
+    "color": [48, 24, 63],
+    "top_gap": 0,
+    "align": "center",
+    "bg": "none",
+    "stroke_width": 0,
+    "stroke_color": [0, 0, 0]
+  },
+
+  "subtitle": {
+    "show": true,
+    "gap_before": 40,
+    "font_size": 40,
+    "color": [100, 75, 110],
+    "stroke_width": 0,
+    "stroke_color": [0, 0, 0]
+  },
+
+  "narration": {
+    "show": true,
+    "font_size": 62,
+    "color": [40, 25, 45],
+    "bg": "clean_box",
+    "bg_color": [210, 195, 218, 220],
+    "border_width": 2,
+    "border_color": [170, 150, 190],
+    "shadow_offset": 5,
+    "shadow_color": [0, 0, 0, 40],
+    "stroke_width": 0,
+    "stroke_color": [0, 0, 0],
+    "guide": "부드럽고 따뜻한 존댓말. 감동적인 순간에 잠깐 멈추며 여운을 주는 톤. '정말 마음이 따뜻해지는 이야기예요' 같은 공감 표현."
+  },
+
+  "image": {
+    "prompt_prefix": "Studio Ghibli inspired warm illustration, nostalgic gentle colors, soft golden lighting, heartwarming domestic scene",
+    "prompt_suffix": "no overlay captions, no watermark, warm lavender and golden tones, dreamy soft art style"
+  },
+
+  "motion": {
+    "camera": ["zoom_in", "static"],
+    "zoom_range": [1.0, 1.04],
+    "transitions": ["fade"],
+    "scene_duration": "4-6초",
+    "fade_duration": 0.6
+  },
+
+  "audio": {
+    "bgm_mood": "chill",
+    "bgm_volume": 0.16,
+    "effect_volume": 0.5
+  }
+}

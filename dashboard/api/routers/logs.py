@@ -1,9 +1,13 @@
-"""로그 파일 읽기 엔드포인트"""
+"""로그 파일 읽기 엔드포인트."""
+
+from __future__ import annotations
 
 import re
+from pathlib import Path
+
 from fastapi import APIRouter, Query
 
-from settings import SCHEDULER_LOG_PATH
+from settings import RECOVERY_SCHEDULER_LOG_PATH, SCHEDULER_LOG_PATH
 
 router = APIRouter()
 
@@ -13,44 +17,94 @@ LOG_PATTERN = re.compile(
     r"(.+)$"
 )
 
+LOG_TARGETS = {
+    "main": SCHEDULER_LOG_PATH,
+    "recovery": RECOVERY_SCHEDULER_LOG_PATH,
+}
 
-def _parse_log_line(line: str) -> dict:
-    """로그 줄을 구조화된 dict로 파싱"""
+
+def _parse_log_line(line: str, source: str, seq: int) -> dict:
     match = LOG_PATTERN.match(line.strip())
     if match:
         return {
             "timestamp": match.group(1),
             "level": match.group(2),
             "message": match.group(3),
+            "source": source,
+            "_seq": seq,
+            "_sort_timestamp": match.group(1),
         }
-    return {"timestamp": "", "level": "INFO", "message": line.strip()}
+    return {
+        "timestamp": "",
+        "level": "INFO",
+        "message": line.strip(),
+        "source": source,
+        "_seq": seq,
+        "_sort_timestamp": "",
+    }
+
+
+def _read_log_entries(log_path: Path, source: str, lines: int) -> tuple[list[dict], int]:
+    if not log_path.exists():
+        return [], 0
+
+    raw = log_path.read_text(encoding="utf-8", errors="replace")
+    all_lines = raw.strip().split("\n") if raw.strip() else []
+    recent = all_lines[-(lines * 3) :] if len(all_lines) > lines * 3 else all_lines
+
+    parsed = []
+    last_timestamp = ""
+    for index, line in enumerate(recent):
+        if not line.strip():
+            continue
+        entry = _parse_log_line(line, source=source, seq=index)
+        if entry["timestamp"]:
+            last_timestamp = entry["timestamp"]
+        else:
+            entry["_sort_timestamp"] = last_timestamp
+        parsed.append(entry)
+
+    return parsed, len(all_lines)
 
 
 @router.get("/tail")
 async def tail_logs(
     lines: int = Query(default=100, ge=1, le=1000),
     level: str = Query(default="INFO"),
+    target: str = Query(default="all", pattern="^(all|main|recovery)$"),
 ):
-    """scheduler.log 최근 N줄 반환 (레벨 필터링)"""
-    if not SCHEDULER_LOG_PATH.exists():
-        return {"logs": [], "total": 0}
-
+    """최근 N줄 로그 반환 (타깃/레벨 필터링)."""
     level_order = {"DEBUG": 0, "INFO": 1, "WARNING": 2, "ERROR": 3, "CRITICAL": 4}
     min_level = level_order.get(level.upper(), 1)
 
-    try:
-        raw = SCHEDULER_LOG_PATH.read_text(encoding="utf-8", errors="replace")
-        all_lines = raw.strip().split("\n") if raw.strip() else []
-        # 최근 N줄 가져오기 (파싱 전에 넉넉하게)
-        recent = all_lines[-(lines * 3) :] if len(all_lines) > lines * 3 else all_lines
+    selected_targets = (
+        LOG_TARGETS.items() if target == "all" else [(target, LOG_TARGETS[target])]
+    )
 
-        parsed = [_parse_log_line(line) for line in recent if line.strip()]
+    entries: list[dict] = []
+    total = 0
+
+    try:
+        for source, log_path in selected_targets:
+            parsed, line_count = _read_log_entries(log_path, source, lines)
+            total += line_count
+            entries.extend(parsed)
+
         filtered = [
             entry
-            for entry in parsed
+            for entry in entries
             if level_order.get(entry["level"], 1) >= min_level
         ]
 
-        return {"logs": filtered[-lines:], "total": len(all_lines)}
-    except Exception as e:
-        return {"logs": [], "total": 0, "error": str(e)}
+        filtered.sort(key=lambda item: (item["_sort_timestamp"], item["_seq"]))
+        response_logs = [
+            {
+                key: value
+                for key, value in entry.items()
+                if key not in {"_seq", "_sort_timestamp"}
+            }
+            for entry in filtered[-lines:]
+        ]
+        return {"logs": response_logs, "total": total, "target": target}
+    except Exception as exc:
+        return {"logs": [], "total": 0, "target": target, "error": str(exc)}

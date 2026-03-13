@@ -31,7 +31,7 @@ def review_production(research_brief: dict, plan: dict) -> dict:
    - 전개가 끊기지 않고, 시청자가 흥미를 유지하며 끝까지 보기 쉬운 구성인가?
    - scene별 narration과 scene_outline/image_intent/action_beat가 같은 사건을 가리키는가?
 4. 감정 유발 (15점): 웃음/감동/통쾌함 등 감정선이 분명한가?
-5. 제목 퀄리티 (10점): 호기심 갭/감정 단어/길이 제약(12자 내외)을 만족하는가?
+5. 제목 퀄리티 (10점): 호기심 갭/감정 단어/길이 제약(12자 내외)을 만족하고, 네이트판/블라인드/디시 같은 커뮤니티 출처 라벨이 없는가?
 6. 기술 스펙 (10점): 씬 수(6-10), 카메라 다양성, 필수 필드 존재
 7. 시각화 적합성 (5점): scene_outline + image_intent + cast + shot_plan + world_context 조합이 이미지 에이전트가 시각화하기 충분한가?
 8. 메타데이터 완결성 (5점): image_intent/setting_hint/emotion_beat/action_beat/cast와 continuity_state/shot_plan/world_context/camera(type/speed)/transition/effect가 자연스럽고 누락 없이 들어있는가?

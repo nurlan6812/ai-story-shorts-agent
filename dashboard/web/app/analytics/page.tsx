@@ -29,8 +29,8 @@ export default function AnalyticsPage() {
 
   const { data: videos } = useSupabaseQuery<Video>({
     table: "videos",
-    select: "id,title,style,bgm_mood,upload_status,youtube_id,created_at",
-    filter: { column: "upload_status", value: "uploaded" },
+    select: "id,title,style,bgm_mood,publish_status,story_type,source_region,is_series,part_number,part_count,ending_type,scene_count,research_brief,youtube_id,created_at",
+    filter: { column: "publish_status", value: "uploaded" },
     order: { column: "created_at", ascending: true },
   });
 
@@ -176,7 +176,7 @@ export default function AnalyticsPage() {
           {/* 트렌드 차트 */}
           <ViewsTrendChart data={videosWithAnalytics} />
 
-          {/* 스타일별 + BGM별 */}
+          {/* 제작 톤 */}
           <div className="grid grid-cols-2 gap-4">
             <StylePerformance
               data={videosWithAnalytics}
@@ -187,6 +187,44 @@ export default function AnalyticsPage() {
               data={videosWithAnalytics}
               groupBy="bgm_mood"
               title="BGM별 평균 조회수"
+            />
+          </div>
+
+          {/* 스토리 특성 */}
+          <div className="grid gap-4 lg:grid-cols-3">
+            <StylePerformance
+              data={videosWithAnalytics}
+              groupBy="story_type"
+              title="스토리 유형별 평균 조회수"
+            />
+            <StylePerformance
+              data={videosWithAnalytics}
+              groupBy="source_region"
+              title="소스 지역별 평균 조회수"
+            />
+            <StylePerformance
+              data={videosWithAnalytics}
+              groupBy="emotion"
+              title="감정 톤별 평균 조회수"
+            />
+          </div>
+
+          {/* 포맷 특성 */}
+          <div className="grid gap-4 lg:grid-cols-3">
+            <StylePerformance
+              data={videosWithAnalytics}
+              groupBy="series_format"
+              title="단편/시리즈 평균 조회수"
+            />
+            <StylePerformance
+              data={videosWithAnalytics}
+              groupBy="ending_type"
+              title="엔딩 타입별 평균 조회수"
+            />
+            <StylePerformance
+              data={videosWithAnalytics}
+              groupBy="scene_density"
+              title="장면 밀도별 평균 조회수"
             />
           </div>
 

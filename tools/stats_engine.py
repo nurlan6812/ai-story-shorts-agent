@@ -25,6 +25,11 @@ def precompute_stats(videos: list[dict]) -> dict:
             "losers": [{video_id, title, views, ...}],
             "by_style": {style: {count, avg_views, avg_ctr, ...}},
             "by_bgm": {bgm: {count, avg_views, ...}},
+            "by_story_type": {...},
+            "by_source_region": {...},
+            "by_series_format": {...},
+            "by_ending_type": {...},
+            "by_scene_density": {...},
             "correlations": {metric_pair: correlation_value},
             "engagement_rates": [{video_id, title, like_rate, comment_rate}],
         }
@@ -121,6 +126,11 @@ def precompute_stats(videos: list[dict]) -> dict:
         "losers": _simplify_rows(losers),
         "by_style": by_style,
         "by_bgm": by_bgm,
+        "by_story_type": _aggregate_by(rows, "story_type"),
+        "by_source_region": _aggregate_by(rows, "source_region"),
+        "by_series_format": _aggregate_by(rows, "series_format"),
+        "by_ending_type": _aggregate_by(rows, "ending_type"),
+        "by_scene_density": _aggregate_by(rows, "scene_density"),
         "correlations": correlations,
         "engagement_rates": engagement_rates[:20],
     }
@@ -136,11 +146,26 @@ def _flatten_videos(videos: list[dict]) -> list[dict]:
         a = v.get("analytics", {})
         if not a:
             continue
+        research_brief = v.get("research_brief") or {}
+        story_type = v.get("story_type") or (research_brief.get("story_type") if isinstance(research_brief, dict) else None) or "unknown"
+        source_region = v.get("source_region") or (research_brief.get("source_region") if isinstance(research_brief, dict) else None) or "unknown"
+        emotion = (research_brief.get("emotion") if isinstance(research_brief, dict) else None) or "unknown"
+        scene_count = int(v.get("scene_count") or 0)
+        is_series = bool(v.get("is_series"))
+        ending_type = v.get("ending_type") or "unknown"
         rows.append({
             "video_id": v.get("id", ""),
             "title": v.get("title", ""),
             "style": v.get("style", "unknown"),
             "bgm_mood": v.get("bgm_mood", "unknown"),
+            "story_type": story_type,
+            "source_region": source_region,
+            "emotion": emotion,
+            "series_format": "series" if is_series else "single",
+            "part_number": int(v.get("part_number") or 0),
+            "scene_count": scene_count,
+            "scene_density": _scene_density_bucket(scene_count),
+            "ending_type": ending_type,
             "tags": v.get("tags", []),
             "views": int(a.get("views", 0)),
             "likes": int(a.get("likes", 0)),
@@ -150,8 +175,21 @@ def _flatten_videos(videos: list[dict]) -> list[dict]:
             "avg_percentage_viewed": float(a.get("avg_percentage_viewed", 0)),
             "watch_time_minutes": float(a.get("watch_time_minutes", 0)),
             "impressions": int(a.get("impressions", 0)),
+            "duration_seconds": int(a.get("duration_seconds", 0)),
+            "viewed_rate": float(a.get("viewed_rate", 0)),
+            "swiped_rate": float(a.get("swiped_rate", 0)),
         })
     return rows
+
+
+def _scene_density_bucket(scene_count: int) -> str:
+    if scene_count <= 0:
+        return "unknown"
+    if scene_count <= 7:
+        return "low"
+    if scene_count <= 9:
+        return "medium"
+    return "high"
 
 
 def _describe(values: list[float | int], decimals: int = 1) -> dict:
@@ -242,6 +280,10 @@ def _simplify_rows(rows: list[dict]) -> list[dict]:
             "video_id": r["video_id"],
             "title": r["title"][:50],
             "style": r["style"],
+            "story_type": r["story_type"],
+            "source_region": r["source_region"],
+            "series_format": r["series_format"],
+            "ending_type": r["ending_type"],
             "views": r["views"],
             "likes": r["likes"],
             "ctr": round(r["ctr"], 4),
@@ -261,6 +303,11 @@ def _empty_stats() -> dict:
         "losers": [],
         "by_style": {},
         "by_bgm": {},
+        "by_story_type": {},
+        "by_source_region": {},
+        "by_series_format": {},
+        "by_ending_type": {},
+        "by_scene_density": {},
         "correlations": {},
         "engagement_rates": [],
     }

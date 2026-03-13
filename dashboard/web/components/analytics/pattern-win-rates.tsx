@@ -20,6 +20,12 @@ export function PatternWinRates({ patterns }: { patterns: Pattern[] }) {
     hook: "후크",
     style: "스타일",
     topic: "토픽",
+    story_type: "스토리 유형",
+    source_region: "소스 지역",
+    series_format: "시리즈 포맷",
+    emotion: "감정 톤",
+    ending_type: "엔딩 타입",
+    scene_density: "장면 밀도",
     avoid: "회피",
     recommendation: "추천",
   };

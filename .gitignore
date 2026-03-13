@@ -8,6 +8,8 @@ __pycache__/
 output/
 assets/effects/
 assets/bgm/
+assets/bgm_safe/
+assets/branding/
 *.mp4
 *.mp3
 *.wav
@@ -17,4 +19,7 @@ assets/bgm/
 firebase-debug.log
 claudedocs/
 supabase/.temp/
+runtime/
+$outdir
 scheduler.log
+scheduler_2.log

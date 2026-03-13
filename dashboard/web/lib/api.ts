@@ -1,4 +1,12 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8002";
+function resolveApiUrl() {
+  if (typeof window !== "undefined") {
+    return "";
+  }
+
+  return process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8002";
+}
+
+const API_URL = resolveApiUrl();
 
 export async function apiFetch<T>(
   path: string,

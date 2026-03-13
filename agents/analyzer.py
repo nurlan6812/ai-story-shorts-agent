@@ -51,6 +51,11 @@ def analyze_performance(videos_with_analytics: list[dict]) -> dict:
 - **winners/losers**: 조회수 상위/하위 30% 영상 목록
 - **by_style**: 스타일별 평균 조회수, 좋아요, CTR, 시청률
 - **by_bgm**: BGM별 동일 집계
+- **by_story_type**: story_type별 집계
+- **by_source_region**: source_region별 집계
+- **by_series_format**: single/series별 집계
+- **by_ending_type**: payoff/cliffhanger/aftershock 등 ending별 집계
+- **by_scene_density**: low/medium/high scene density별 집계
 - **correlations**: 지표 간 상관계수
 - **engagement_rates**: 영상별 좋아요율, 댓글율
 
@@ -59,6 +64,9 @@ def analyze_performance(videos_with_analytics: list[dict]) -> dict:
 - **story_type별 성과**: funny, touching, revenge, absurd 등 어떤 유형이 잘 되는지
 - **emotion별 성과**: humor, heartwarming, satisfying 등 감정 유형별 분석
 - **스타일별 성과**: casual, storytelling, darkcomedy 등 어떤 톤이 좋은지
+- **시리즈/단편 성과**: single vs series, part progression
+- **마무리 방식 성과**: payoff, aftershock, cliffhanger 등 ending_type별 차이
+- **장면 밀도 성과**: low/medium/high scene density 차이
 
 ## 해석 요청
 
@@ -80,8 +88,20 @@ def analyze_performance(videos_with_analytics: list[dict]) -> dict:
     "story_types": [
       {{"story_type": "유형명", "performance": "high/medium/low"}}
     ],
+    "source_regions": [
+      {{"source_region": "한국|외국", "performance": "high/medium/low"}}
+    ],
+    "series_formats": [
+      {{"series_format": "single|series", "performance": "high/medium/low"}}
+    ],
     "emotions": [
       {{"emotion": "감정유형", "performance": "high/medium/low"}}
+    ],
+    "ending_types": [
+      {{"ending_type": "payoff|aftershock|cliffhanger|unknown", "performance": "high/medium/low"}}
+    ],
+    "scene_density": [
+      {{"scene_density": "low|medium|high", "performance": "high/medium/low"}}
     ],
     "topics": [
       {{"topic_keyword": "키워드", "performance": "high/medium/low"}}
@@ -117,7 +137,17 @@ def _empty_result(message: str) -> dict:
     return {
         "winners": [],
         "losers": [],
-        "patterns": {"styles": [], "story_types": [], "emotions": [], "topics": [], "timing": []},
+        "patterns": {
+            "styles": [],
+            "story_types": [],
+            "source_regions": [],
+            "series_formats": [],
+            "emotions": [],
+            "ending_types": [],
+            "scene_density": [],
+            "topics": [],
+            "timing": [],
+        },
         "recommendations": [message],
         "avoid": [],
         "confidence": "low",

@@ -4,8 +4,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Upload } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 import type { HealthStatus } from "@/lib/types";
+import { useHasMounted } from "@/hooks/use-has-mounted";
 
 export function QuotaCard({ health }: { health: HealthStatus | null }) {
+  const mounted = useHasMounted();
   const quota = health?.quota;
   const used = quota?.used ?? 0;
   const limit = quota?.limit ?? 3;
@@ -27,24 +29,28 @@ export function QuotaCard({ health }: { health: HealthStatus | null }) {
       <CardContent>
         <div className="flex items-center gap-4">
           <div className="relative h-20 w-20">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={chartData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={24}
-                  outerRadius={36}
-                  startAngle={90}
-                  endAngle={-270}
-                  dataKey="value"
-                  stroke="none"
-                >
-                  <Cell fill="#2977f5" />
-                  <Cell fill="rgba(255,255,255,0.06)" />
-                </Pie>
-              </PieChart>
-            </ResponsiveContainer>
+            {mounted ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={chartData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={24}
+                    outerRadius={36}
+                    startAngle={90}
+                    endAngle={-270}
+                    dataKey="value"
+                    stroke="none"
+                  >
+                    <Cell fill="#2977f5" />
+                    <Cell fill="rgba(255,255,255,0.06)" />
+                  </Pie>
+                </PieChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full w-full" />
+            )}
             <div className="absolute inset-0 flex items-center justify-center">
               <span className="text-sm font-bold">
                 {used}/{limit}

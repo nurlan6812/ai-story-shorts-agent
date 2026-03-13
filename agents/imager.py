@@ -1,11 +1,14 @@
 """Image Agent - Director 구조 플랜을 이미지 생성 질의로 변환"""
 
 import json
+import time
 from google import genai
 from config.settings import GEMINI_API_KEY
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 MODEL = "gemini-3.1-pro-preview"
+MAX_RETRIES = 4
+BASE_RETRY_DELAY = 5
 
 
 def _parse_json(text: str) -> dict:
@@ -21,6 +24,41 @@ def _parse_json(text: str) -> dict:
             return json.loads(cleaned)
         except Exception:
             return {}
+
+
+def _collect_updates(data: dict, expected_scene_count: int) -> tuple[dict[int, dict], str | None]:
+    raw_scenes = data.get("scenes")
+    if not isinstance(raw_scenes, list):
+        return {}, "scenes is not a list"
+
+    updates: dict[int, dict] = {}
+    for item in raw_scenes:
+        if not isinstance(item, dict):
+            continue
+        idx = item.get("index")
+        if not isinstance(idx, int):
+            continue
+        if idx < 0 or idx >= expected_scene_count:
+            continue
+
+        image_query = str(item.get("image_query", "")).strip()
+        if not image_query:
+            return {}, f"scene {idx} image_query is empty"
+
+        updates[idx] = {
+            "image_query": image_query,
+            "image_intent": str(item.get("image_intent", "")).strip(),
+            "setting_hint": str(item.get("setting_hint", "")).strip(),
+            "emotion_beat": str(item.get("emotion_beat", "")).strip(),
+            "action_beat": str(item.get("action_beat", "")).strip(),
+            "cast": item.get("cast", []),
+            "character_beats": item.get("character_beats", []),
+        }
+
+    missing = [str(i) for i in range(expected_scene_count) if i not in updates]
+    if missing:
+        return {}, f"missing scene updates: {', '.join(missing)}"
+    return updates, None
 
 
 def generate_image_queries(
@@ -121,47 +159,40 @@ Return JSON only:
 """
 
     updates: dict[int, dict] = {}
-    try:
-        response = client.models.generate_content(model=MODEL, contents=prompt)
-        data = _parse_json(response.text)
-        for item in data.get("scenes", []):
-            if not isinstance(item, dict):
-                continue
-            idx = item.get("index")
-            q = str(item.get("image_query", "")).strip()
-            if not isinstance(idx, int):
-                continue
-            updates[idx] = {
-                "image_query": q,
-                "image_intent": str(item.get("image_intent", "")).strip(),
-                "setting_hint": str(item.get("setting_hint", "")).strip(),
-                "emotion_beat": str(item.get("emotion_beat", "")).strip(),
-                "action_beat": str(item.get("action_beat", "")).strip(),
-                "cast": item.get("cast", []),
-                "character_beats": item.get("character_beats", []),
-            }
-    except Exception:
-        updates = {}
+    last_error = "invalid or empty response"
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            response = client.models.generate_content(model=MODEL, contents=prompt)
+            data = _parse_json(response.text)
+            updates, validation_error = _collect_updates(data, len(scenes))
+            if validation_error:
+                last_error = validation_error
+            else:
+                break
+        except Exception as e:
+            last_error = str(e)
+
+        if attempt < MAX_RETRIES:
+            wait = BASE_RETRY_DELAY * (2 ** (attempt - 1))
+            print(
+                f"  ⏳ Image Agent image_query 재시도 대기 {wait}초 "
+                f"({attempt}/{MAX_RETRIES})"
+            )
+            time.sleep(wait)
+    else:
+        raise RuntimeError(
+            f"Image query generation failed after {MAX_RETRIES} attempts. "
+            f"detail={last_error}"
+        )
 
     new_scenes = []
     for i, s in enumerate(scenes):
         new_s = dict(s)
         item = updates.get(i, {})
         updated_query = str(item.get("image_query", "")).strip() if isinstance(item, dict) else ""
-        if updated_query:
-            new_s["image_query"] = updated_query
-        else:
-            fallback = str(new_s.get("image_query", "")).strip()
-            if not fallback:
-                parts = [
-                    str(new_s.get("scene_outline", "")).strip(),
-                    str(new_s.get("image_intent", "")).strip(),
-                    str(new_s.get("setting_hint", "")).strip(),
-                    str(new_s.get("emotion_beat", "")).strip(),
-                    str(new_s.get("action_beat", "")).strip(),
-                ]
-                fallback = ", ".join([p for p in parts if p])
-            new_s["image_query"] = fallback
+        if not updated_query:
+            raise RuntimeError(f"Image Agent returned no image_query for scene {i}")
+        new_s["image_query"] = updated_query
 
         # Director-lite를 지원하기 위해 이미지 관련 힌트는 Image Agent가 보강한다.
         for key in ("image_intent", "setting_hint", "emotion_beat", "action_beat"):

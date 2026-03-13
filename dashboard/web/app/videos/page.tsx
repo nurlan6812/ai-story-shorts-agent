@@ -5,13 +5,21 @@ import { Card, CardContent } from "@/components/ui/card";
 import { VideoTable } from "@/components/videos/video-table";
 import { VideoFilters } from "@/components/videos/video-filters";
 import { useSupabaseQuery } from "@/hooks/use-supabase-query";
-import { Upload, Loader2, AlertTriangle } from "lucide-react";
+import { Upload, Loader2, AlertTriangle, CalendarClock } from "lucide-react";
 import type { Video, Analytics } from "@/lib/types";
 
 export type VideoWithAnalytics = Video & { analytics: Analytics | null };
 
+function hasScheduledPublish(video: Video) {
+  const status = video.publish_status;
+  const isPendingPublish =
+    status === "ready" || status === "queued" || status === "uploading";
+  return isPendingPublish && !!video.publish_after;
+}
+
 export default function VideosPage() {
   const [status, setStatus] = useState("all");
+  const [view, setView] = useState("all");
   const [search, setSearch] = useState("");
 
   const { data: videos, loading } = useSupabaseQuery<Video>({
@@ -43,20 +51,43 @@ export default function VideosPage() {
   const filtered = useMemo(() => {
     let result = videosWithAnalytics;
     if (status !== "all") {
-      result = result.filter((v) => v.upload_status === status);
+      result = result.filter((v) => v.publish_status === status);
+    }
+    if (view === "scheduled") {
+      result = result.filter(
+        (v) => v.publish_status === "queued" || hasScheduledPublish(v)
+      );
+      result = [...result].sort((a, b) => {
+        const aTime = a.publish_after ? Date.parse(a.publish_after) : Number.MAX_SAFE_INTEGER;
+        const bTime = b.publish_after ? Date.parse(b.publish_after) : Number.MAX_SAFE_INTEGER;
+        return aTime - bTime;
+      });
+    }
+    if (view === "series") {
+      result = result.filter((v) => v.is_series);
     }
     if (search) {
       const q = search.toLowerCase();
-      result = result.filter((v) => v.title.toLowerCase().includes(q));
+      result = result.filter((v) =>
+        [v.title, v.series_title || ""].some((value) =>
+          value.toLowerCase().includes(q)
+        )
+      );
     }
     return result;
   }, [videosWithAnalytics, status, search]);
 
   const stats = useMemo(() => {
-    const uploaded = videos.filter((v) => v.upload_status === "uploaded").length;
-    const pending = videos.filter((v) => v.upload_status === "pending").length;
-    const failed = videos.filter((v) => v.upload_status === "failed").length;
-    return { uploaded, pending, failed };
+    const uploaded = videos.filter((v) => v.publish_status === "uploaded").length;
+    const queued = videos.filter((v) => {
+      const status = v.publish_status;
+      return status === "ready" || status === "queued" || status === "uploading";
+    }).length;
+    const scheduled = videos.filter(
+      (v) => v.publish_status === "queued" || hasScheduledPublish(v)
+    ).length;
+    const failed = videos.filter((v) => v.publish_status === "failed").length;
+    return { uploaded, queued, scheduled, failed };
   }, [videos]);
 
   return (
@@ -69,7 +100,7 @@ export default function VideosPage() {
       </div>
 
       {/* 통계 요약 패널 */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-4 gap-3">
         <Card className="glow-border">
           <CardContent className="flex items-center gap-3 py-3 px-4">
             <Upload className="h-4 w-4 text-emerald-400" />
@@ -83,8 +114,17 @@ export default function VideosPage() {
           <CardContent className="flex items-center gap-3 py-3 px-4">
             <Loader2 className="h-4 w-4 text-blue-400" />
             <div>
-              <p className="text-lg font-bold">{stats.pending}</p>
-              <p className="text-[10px] text-muted-foreground">진행중</p>
+              <p className="text-lg font-bold">{stats.queued}</p>
+              <p className="text-[10px] text-muted-foreground">업로드 대기</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="flex items-center gap-3 py-3 px-4">
+            <CalendarClock className="h-4 w-4 text-violet-400" />
+            <div>
+              <p className="text-lg font-bold">{stats.scheduled}</p>
+              <p className="text-[10px] text-muted-foreground">예약 발행</p>
             </div>
           </CardContent>
         </Card>
@@ -101,8 +141,10 @@ export default function VideosPage() {
 
       <VideoFilters
         status={status}
+        view={view}
         search={search}
         onStatusChange={setStatus}
+        onViewChange={setView}
         onSearchChange={setSearch}
       />
 

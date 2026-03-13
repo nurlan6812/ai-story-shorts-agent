@@ -1,9 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { AlertTriangle, RotateCcw, X } from "lucide-react";
+import { AlertTriangle, History, X } from "lucide-react";
 import { useSupabaseQuery } from "@/hooks/use-supabase-query";
 import type { Run } from "@/lib/types";
 import { format, parseISO } from "date-fns";
@@ -53,12 +54,15 @@ export function ErrorSummary() {
                   </p>
                   <div className="flex gap-1">
                     <Button
+                      asChild
                       variant="ghost"
                       size="icon"
                       className="h-5 w-5 text-muted-foreground hover:text-blue-400"
-                      title="재시도"
+                      title="실행 기록"
                     >
-                      <RotateCcw className="h-3 w-3" />
+                      <Link href="/runs">
+                        <History className="h-3 w-3" />
+                      </Link>
                     </Button>
                     <Button
                       variant="ghost"

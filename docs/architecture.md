@@ -45,10 +45,24 @@ Researcher
 ### [scheduler.py](/Users/seogjaegwang/personal/youtube_humor/scheduler.py)
 
 스케줄 작업:
-- 생성 + 업로드
+- 정규 슬롯 생성 + 업로드
 - 애널리틱스 수집
 - 패턴 분석
 - 헬스 체크
+
+### [scheduler_jobs.py](/Users/seogjaegwang/personal/youtube_humor/scheduler_jobs.py)
+
+역할:
+- 슬롯 기준 생성 작업 공통 로직
+- slot lock 기반 중복 실행 방지
+- 업로드 결과 누락 여부 확인
+- 누락 슬롯 재시도
+
+### [scheduler_2.py](/Users/seogjaegwang/personal/youtube_humor/scheduler_2.py)
+
+역할:
+- 매시 정각 복구 점검
+- 최근 생성 슬롯에 업로드 결과가 없으면 `scheduler_jobs.job_check_missed_slot()`로 보강 실행
 
 ## 3. 단편 파이프라인
 
@@ -288,12 +302,21 @@ Researcher
 - 이후 생성 시 `with-feedback` 입력에 활용
 
 ### 자동 모드
-- `scheduler.py` 또는 `main.py --auto`
-- 대기열 우선 업로드
-- 패턴 로드
-- 리서치
-- 단편/시리즈 분기
-- 생성 및 업로드
+- `scheduler.py`
+  - 정규 슬롯 생성/업로드
+  - 애널리틱스 수집
+  - 패턴 분석
+  - 헬스 체크
+- `scheduler_2.py`
+  - 누락 슬롯 복구 점검
+- `main.py --auto`
+  - 즉시 1회 자동 생성/업로드
+
+자동화 흐름:
+1. 메인 스케줄러가 정규 슬롯에서 생성 시도
+2. `scheduler_jobs`가 slot lock으로 중복 생성을 막음
+3. Supabase에서 해당 슬롯 구간의 업로드 결과를 확인
+4. 실패/누락된 슬롯은 복구 스케줄러가 정각 점검 후 재시도
 
 ## 10. 산출물
 
@@ -318,6 +341,7 @@ Researcher
 1. 단편과 시리즈는 narrator/director가 분리되어 있음
 2. 시리즈에서는 narrator가 전역 캐릭터 풀을 먼저 고정함
 3. 단편에서는 director가 아직 캐릭터 생성 책임을 가짐
+4. 자동화는 메인 스케줄러와 복구 스케줄러를 분리해 슬롯 누락을 보강함
 4. image prompt는 `Imager -> main.py wrapper -> image model` 2단 구조
 5. speech planner는 narration을 rewrite하지 않고 segmentation만 담당
 6. 비최종편은 teaser card를 자동으로 붙일 수 있음

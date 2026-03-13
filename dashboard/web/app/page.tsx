@@ -1,7 +1,7 @@
 "use client";
 
 import { useApi } from "@/hooks/use-api";
-import type { SchedulerStatus, HealthStatus } from "@/lib/types";
+import type { SchedulerOverview, HealthStatus } from "@/lib/types";
 import { QuotaCard } from "@/components/dashboard/quota-card";
 import { SchedulerStatusCard } from "@/components/dashboard/scheduler-status";
 import { RecentVideos } from "@/components/dashboard/recent-videos";
@@ -9,7 +9,7 @@ import { ErrorSummary } from "@/components/dashboard/error-summary";
 import { HealthIndicators } from "@/components/dashboard/health-indicators";
 
 export default function DashboardPage() {
-  const { data: scheduler } = useApi<SchedulerStatus>("/api/scheduler/status");
+  const { data: scheduler } = useApi<SchedulerOverview>("/api/scheduler/status");
   const { data: health } = useApi<HealthStatus>("/api/health/status", {
     interval: 30000,
   });

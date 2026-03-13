@@ -1,11 +1,11 @@
-"""유머/썰 YouTube Shorts 완전 자동화 스케줄러 (APScheduler 기반)
+"""유머/썰 YouTube Shorts 메인 스케줄러 (APScheduler 기반)
 
 사용법:
-    python scheduler.py           # 데몬 시작 (3회/일 자동 생성)
+    python scheduler.py           # 데몬 시작 (메인 생성/분석/헬스체크)
     python scheduler.py --once    # 1회 실행 후 종료
 
 스케줄:
-    - 06:00, 12:00, 19:00 KST: 영상 생성 + 업로드
+    - 06:30, 12:30, 18:30 KST: 영상 생성 + 업로드
     - 6시간마다: 48시간+ 영상 애널리틱스 수집
     - 00:00 KST: 전체 성과 분석 + 패턴 업데이트
     - 1시간마다: 헬스 체크
@@ -15,11 +15,12 @@ import argparse
 import logging
 import signal
 import sys
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
+from scheduler_jobs import KST, job_generate_and_upload
 
 logging.basicConfig(
     level=logging.INFO,
@@ -27,99 +28,6 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 log = logging.getLogger("scheduler")
-
-KST = timezone(timedelta(hours=9))
-
-
-# ============================================================
-# 작업 함수들
-# ============================================================
-
-def job_generate_and_upload():
-    """영상 생성 + 업로드 (1회) — 대기열 우선 처리"""
-    log.info("=== 영상 생성+업로드 시작 ===")
-
-    try:
-        from tools.youtube_uploader import check_daily_quota_remaining
-        quota = check_daily_quota_remaining()
-        if not quota["can_upload"]:
-            log.info(f"일일 쿼터 초과 ({quota['used']}/{quota['limit']}). 건너뜁니다.")
-            return
-
-        log.info(f"남은 쿼터: {quota['remaining']}/{quota['limit']}")
-
-        # 1) 대기열 우선 처리
-        from main import _process_upload_queue
-        if _process_upload_queue():
-            log.info("대기열 영상 1편 업로드 완료")
-            quota = check_daily_quota_remaining()
-            if not quota["can_upload"]:
-                log.info("대기열 업로드 후 쿼터 소진. 새 영상 생성 건너뜁니다.")
-                return
-
-        # 2) 피드백 패턴 로드
-        winning_patterns = None
-        trend_hints = None
-        try:
-            from tools.supabase_client import get_active_patterns
-            patterns = get_active_patterns()
-            if patterns:
-                from main import _build_winning_patterns, _build_trend_hints
-                winning_patterns = _build_winning_patterns(patterns)
-                trend_hints = _build_trend_hints(patterns)
-                log.info(f"활성 패턴 {len(patterns)}개 로드")
-        except Exception as e:
-            log.warning(f"패턴 로드 실패: {e}")
-
-        # 3) 리서치 먼저 실행 (시리즈 판단 필요)
-        from agents.researcher import research
-        from main import run_pipeline_single, _run_series_pipeline, _handle_upload, _enqueue_upload
-
-        research_brief = research("", trend_hints=trend_hints)
-        if research_brief.get("source_region") not in {"한국", "외국"}:
-            research_brief["source_region"] = "한국"
-        log.info(f"리서치 완료: {research_brief.get('topic', '?')}")
-
-        is_series = research_brief.get("series_potential", False)
-        series_parts_data = research_brief.get("series_parts", []) if is_series else []
-
-        if is_series and len(series_parts_data) > 1:
-            total_parts = len(series_parts_data)
-            log.info(f"시리즈 {total_parts}편 생성 시작")
-
-            # 전편 생성
-            results = _run_series_pipeline(
-                research_brief=research_brief,
-                no_critic=False,
-                winning_patterns=winning_patterns,
-            )
-
-            # 1편 즉시 업로드, 나머지 대기열
-            if results:
-                log.info(f"시리즈 1/{len(results)}편 즉시 업로드")
-                try:
-                    _handle_upload(results[0][0], results[0][1])
-                except Exception as e:
-                    log.warning(f"1편 업로드 실패, 대기열로 이동: {e}")
-                    _enqueue_upload(results[0][0], results[0][1])
-
-                for i, (video, meta) in enumerate(results[1:], 2):
-                    log.info(f"시리즈 {i}/{len(results)}편 대기열 저장")
-                    _enqueue_upload(video, meta)
-        else:
-            # 단일 영상
-            final_video, metadata = run_pipeline_single(
-                topic=str(research_brief.get("topic", "") or ""),
-                no_research=True,
-                no_critic=False,
-                winning_patterns=winning_patterns,
-                research_brief_override=research_brief,
-            )
-            _handle_upload(final_video, metadata)
-            log.info(f"완료: {metadata.get('title', '?')}")
-
-    except Exception as e:
-        log.error(f"생성+업로드 실패: {e}", exc_info=True)
 
 
 def job_collect_analytics():
@@ -148,7 +56,7 @@ def job_analyze_patterns():
         )
         from agents.analyzer import analyze_performance
 
-        run_record = insert_run(run_type="analyze")
+        run_record = insert_run(run_type="analyze_patterns", trigger_source="schedule")
         run_id = run_record["id"] if run_record else None
 
         client = get_client()
@@ -157,7 +65,7 @@ def job_analyze_patterns():
             return
 
         # 업로드된 영상 + 애널리틱스 조인
-        videos = list_videos(limit=100, upload_status="uploaded")
+        videos = list_videos(limit=100, publish_status="uploaded")
         if not videos:
             log.info("분석 대상 영상 없음")
             if run_id:
@@ -222,12 +130,52 @@ def job_analyze_patterns():
             )
             patterns_saved += 1
 
+        for source_region in result.get("patterns", {}).get("source_regions", []):
+            perf = source_region.get("performance", "medium")
+            upsert_pattern(
+                pattern_type="source_region",
+                pattern_key=source_region.get("source_region", ""),
+                pattern_data=source_region,
+                win_rate={"high": 0.8, "medium": 0.5, "low": 0.2}.get(perf, 0.5),
+            )
+            patterns_saved += 1
+
+        for series_format in result.get("patterns", {}).get("series_formats", []):
+            perf = series_format.get("performance", "medium")
+            upsert_pattern(
+                pattern_type="series_format",
+                pattern_key=series_format.get("series_format", ""),
+                pattern_data=series_format,
+                win_rate={"high": 0.8, "medium": 0.5, "low": 0.2}.get(perf, 0.5),
+            )
+            patterns_saved += 1
+
         for emotion in result.get("patterns", {}).get("emotions", []):
             perf = emotion.get("performance", "medium")
             upsert_pattern(
                 pattern_type="emotion",
                 pattern_key=emotion.get("emotion", ""),
                 pattern_data=emotion,
+                win_rate={"high": 0.8, "medium": 0.5, "low": 0.2}.get(perf, 0.5),
+            )
+            patterns_saved += 1
+
+        for ending in result.get("patterns", {}).get("ending_types", []):
+            perf = ending.get("performance", "medium")
+            upsert_pattern(
+                pattern_type="ending_type",
+                pattern_key=ending.get("ending_type", ""),
+                pattern_data=ending,
+                win_rate={"high": 0.8, "medium": 0.5, "low": 0.2}.get(perf, 0.5),
+            )
+            patterns_saved += 1
+
+        for density in result.get("patterns", {}).get("scene_density", []):
+            perf = density.get("performance", "medium")
+            upsert_pattern(
+                pattern_type="scene_density",
+                pattern_key=density.get("scene_density", ""),
+                pattern_data=density,
                 win_rate={"high": 0.8, "medium": 0.5, "low": 0.2}.get(perf, 0.5),
             )
             patterns_saved += 1
@@ -272,7 +220,7 @@ def job_analyze_patterns():
         try:
             if run_id:
                 from tools.supabase_client import update_run
-                update_run(run_id, status="failed", error_message=str(e))
+                update_run(run_id, status="failed", error_message=str(e), failure_stage="analyze_patterns")
         except Exception:
             pass
 
@@ -325,10 +273,10 @@ def create_scheduler() -> BlockingScheduler:
     """APScheduler 설정 및 작업 등록"""
     scheduler = BlockingScheduler(timezone="Asia/Seoul")
 
-    # 영상 생성+업로드: 06:00, 12:00, 19:00 KST
+    # 영상 생성+업로드: 06:30, 12:30, 18:30 KST
     scheduler.add_job(
         job_generate_and_upload,
-        CronTrigger(hour="6,12,19", minute=0, timezone="Asia/Seoul"),
+        CronTrigger(hour="6,12,18", minute=30, timezone="Asia/Seoul"),
         id="generate_and_upload",
         name="영상 생성+업로드",
         max_instances=1,
@@ -368,11 +316,11 @@ def create_scheduler() -> BlockingScheduler:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="유머/썰 YouTube Shorts 자동화 스케줄러")
+    parser = argparse.ArgumentParser(description="유머/썰 YouTube Shorts 메인 스케줄러")
     parser.add_argument(
         "--once",
         action="store_true",
-        help="1회 실행 후 종료 (전체 사이클)",
+        help="1회 실행 후 종료",
     )
     args = parser.parse_args()
 
@@ -395,9 +343,9 @@ def main():
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
-    log.info("=== 썰알람 YouTube Shorts 자동화 스케줄러 시작 ===")
+    log.info("=== 썰알람 YouTube Shorts 메인 스케줄러 시작 ===")
     log.info("스케줄:")
-    log.info("  - 영상 생성+업로드: 06:00, 12:00, 19:00 KST")
+    log.info("  - 영상 생성+업로드: 06:30, 12:30, 18:30 KST")
     log.info("  - 애널리틱스 수집: 6시간마다")
     log.info("  - 성과 분석: 매일 00:00 KST")
     log.info("  - 헬스 체크: 1시간마다")

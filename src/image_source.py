@@ -9,6 +9,7 @@ from config.settings import GEMINI_API_KEY
 # 재시도 설정
 MAX_RETRIES = 10
 RETRY_DELAY = 10  # 초
+IMAGE_REQUEST_TIMEOUT_MS = 600_000  # 10분
 
 # Gemini 클라이언트 (이미지 생성용)
 _gemini_client = None
@@ -16,7 +17,10 @@ _gemini_client = None
 def _get_gemini_client():
     global _gemini_client
     if _gemini_client is None:
-        _gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+        _gemini_client = genai.Client(
+            api_key=GEMINI_API_KEY,
+            http_options=types.HttpOptions(timeout=IMAGE_REQUEST_TIMEOUT_MS),
+        )
     return _gemini_client
 
 

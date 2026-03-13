@@ -12,6 +12,10 @@ _client = None
 _initialized = False
 
 
+def _clean_updates(data: dict) -> dict:
+    return {k: v for k, v in data.items() if v is not None}
+
+
 def get_client():
     """Supabase 클라이언트 lazy init
 
@@ -47,7 +51,21 @@ def insert_video(
     style: str = "",
     bgm_mood: str = "",
     summary: str = "",
-    upload_status: str = "pending",
+    generation_status: str = "generated",
+    publish_status: str = "ready",
+    is_series: bool = False,
+    series_group_id: str | None = None,
+    series_title: str | None = None,
+    part_number: int | None = None,
+    part_count: int | None = None,
+    publish_after: str | None = None,
+    source_fingerprint: str | None = None,
+    story_type: str | None = None,
+    source_region: str | None = None,
+    scene_count: int | None = None,
+    ending_type: str | None = None,
+    trigger_source: str | None = None,
+    youtube_id: str | None = None,
     production_plan: dict | None = None,
     research_brief: dict | None = None,
 ) -> dict | None:
@@ -64,54 +82,120 @@ def insert_video(
         "style": style,
         "bgm_mood": bgm_mood,
         "summary": summary,
-        "upload_status": upload_status,
+        "generation_status": generation_status,
+        "publish_status": publish_status,
+        "is_series": is_series,
+        "series_group_id": series_group_id,
+        "series_title": series_title,
+        "part_number": part_number,
+        "part_count": part_count,
+        "publish_after": publish_after,
+        "source_fingerprint": source_fingerprint,
+        "story_type": story_type,
+        "source_region": source_region,
+        "scene_count": scene_count,
+        "ending_type": ending_type,
+        "trigger_source": trigger_source,
+        "youtube_id": youtube_id,
         "production_plan": production_plan,
         "research_brief": research_brief,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    data = _clean_updates(data)
 
     result = client.table("videos").insert(data).execute()
     return result.data[0] if result.data else data
 
 
-def update_video_status(
+def update_video(
     video_id: str,
-    upload_status: str | None = None,
-    youtube_id: str | None = None,
-    published_at: str | None = None,
+    **updates,
 ) -> dict | None:
-    """영상 업로드 상태 업데이트"""
+    """영상 레코드 임의 필드 업데이트"""
     client = get_client()
     if client is None:
         return None
 
+    cleaned = _clean_updates(updates)
+    if not cleaned:
+        return None
+
+    result = client.table("videos").update(cleaned).eq("id", video_id).execute()
+    return result.data[0] if result.data else None
+
+
+def update_video_status(
+    video_id: str,
+    generation_status: str | None = None,
+    publish_status: str | None = None,
+    youtube_id: str | None = None,
+    published_at: str | None = None,
+    publish_after: str | None = None,
+) -> dict | None:
+    """영상 업로드 상태 업데이트"""
     updates = {}
-    if upload_status is not None:
-        updates["upload_status"] = upload_status
+    if generation_status is not None:
+        updates["generation_status"] = generation_status
+    if publish_status is not None:
+        updates["publish_status"] = publish_status
     if youtube_id is not None:
         updates["youtube_id"] = youtube_id
     if published_at is not None:
         updates["published_at"] = published_at
+    if publish_after is not None:
+        updates["publish_after"] = publish_after
 
-    if not updates:
-        return None
-
-    result = client.table("videos").update(updates).eq("id", video_id).execute()
-    return result.data[0] if result.data else None
+    return update_video(video_id, **updates)
 
 
-def list_videos(limit: int = 50, upload_status: str | None = None) -> list[dict]:
+def list_videos(
+    limit: int = 50,
+    publish_status: str | None = None,
+    generation_status: str | None = None,
+) -> list[dict]:
     """영상 목록 조회"""
     client = get_client()
     if client is None:
         return []
 
     query = client.table("videos").select("*").order("created_at", desc=True).limit(limit)
-    if upload_status:
-        query = query.eq("upload_status", upload_status)
+    if publish_status:
+        query = query.eq("publish_status", publish_status)
+    if generation_status:
+        query = query.eq("generation_status", generation_status)
 
     result = query.execute()
     return result.data or []
+
+
+def get_video(video_id: str) -> dict | None:
+    client = get_client()
+    if client is None:
+        return None
+
+    result = client.table("videos").select("*").eq("id", video_id).limit(1).execute()
+    return result.data[0] if result.data else None
+
+
+def find_recent_video_by_source_fingerprint(
+    source_fingerprint: str,
+    days: int = 30,
+) -> dict | None:
+    client = get_client()
+    if client is None or not source_fingerprint:
+        return None
+
+    threshold = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    result = (
+        client.table("videos")
+        .select("*")
+        .eq("source_fingerprint", source_fingerprint)
+        .gte("created_at", threshold)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    return result.data[0] if result.data else None
 
 
 def get_recent_topics(days: int = 7, limit: int = 20) -> list[str]:
@@ -125,7 +209,7 @@ def get_recent_topics(days: int = 7, limit: int = 20) -> list[str]:
     result = (
         client.table("videos")
         .select("title, summary, description")
-        .eq("upload_status", "uploaded")
+        .eq("publish_status", "uploaded")
         .gte("published_at", threshold)
         .order("published_at", desc=True)
         .limit(limit)
@@ -162,7 +246,7 @@ def get_last_upload_time() -> str | None:
     result = (
         client.table("videos")
         .select("published_at")
-        .eq("upload_status", "uploaded")
+        .eq("publish_status", "uploaded")
         .not_.is_("published_at", "null")
         .order("published_at", desc=True)
         .limit(1)
@@ -181,6 +265,11 @@ def get_last_upload_time() -> str | None:
 def insert_run(
     run_type: str = "generate",
     video_id: str | None = None,
+    trigger_source: str | None = None,
+    retry_count: int = 0,
+    failure_stage: str | None = None,
+    slot_key: str | None = None,
+    run_meta: dict | None = None,
 ) -> dict | None:
     """runs 테이블에 실행 기록 삽입"""
     client = get_client()
@@ -193,7 +282,13 @@ def insert_run(
         "status": "running",
         "run_type": run_type,
         "video_id": video_id,
+        "trigger_source": trigger_source,
+        "retry_count": retry_count,
+        "failure_stage": failure_stage,
+        "slot_key": slot_key,
+        "run_meta": run_meta or {},
     }
+    data = _clean_updates(data)
 
     result = client.table("runs").insert(data).execute()
     return result.data[0] if result.data else data
@@ -204,6 +299,11 @@ def update_run(
     status: str | None = None,
     error_message: str | None = None,
     video_id: str | None = None,
+    trigger_source: str | None = None,
+    retry_count: int | None = None,
+    failure_stage: str | None = None,
+    slot_key: str | None = None,
+    run_meta: dict | None = None,
 ) -> dict | None:
     """실행 기록 업데이트"""
     client = get_client()
@@ -219,6 +319,16 @@ def update_run(
         updates["error_message"] = error_message
     if video_id is not None:
         updates["video_id"] = video_id
+    if trigger_source is not None:
+        updates["trigger_source"] = trigger_source
+    if retry_count is not None:
+        updates["retry_count"] = retry_count
+    if failure_stage is not None:
+        updates["failure_stage"] = failure_stage
+    if slot_key is not None:
+        updates["slot_key"] = slot_key
+    if run_meta is not None:
+        updates["run_meta"] = run_meta
 
     if not updates:
         return None
@@ -311,7 +421,7 @@ def list_videos_pending_analytics() -> list[dict]:
     videos = (
         client.table("videos")
         .select("*")
-        .eq("upload_status", "uploaded")
+        .eq("publish_status", "uploaded")
         .not_.is_("youtube_id", "null")
         .lte("published_at", threshold)
         .execute()

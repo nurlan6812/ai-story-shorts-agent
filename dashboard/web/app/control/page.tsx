@@ -2,22 +2,29 @@
 
 import { useState } from "react";
 import { SchedulerControl } from "@/components/control/scheduler-control";
+import { RecoveryActivity } from "@/components/control/recovery-activity";
 import { ManualGenerate } from "@/components/control/manual-generate";
 import { PatternManager } from "@/components/control/pattern-manager";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useApi } from "@/hooks/use-api";
 import { LogViewer } from "@/components/logs/log-viewer";
 import { Terminal, Maximize2, Minimize2 } from "lucide-react";
-import type { LogsResponse } from "@/lib/types";
+import type { LogTarget, LogsResponse } from "@/lib/types";
 
 const levels = ["DEBUG", "INFO", "WARNING", "ERROR"];
+const logTargets = [
+  { label: "전체", value: "all" },
+  { label: "메인", value: "main" },
+  { label: "복구", value: "recovery" },
+] as const;
 
 export default function ControlPage() {
   const [level, setLevel] = useState("INFO");
+  const [target, setTarget] = useState<LogTarget>("all");
   const [expanded, setExpanded] = useState(false);
 
   const { data: logData } = useApi<LogsResponse>(
-    `/api/logs/tail?lines=${expanded ? 200 : 15}&level=${level}`,
+    `/api/logs/tail?lines=${expanded ? 200 : 15}&level=${level}&target=${target}`,
     { interval: 3000 }
   );
 
@@ -25,10 +32,21 @@ export default function ControlPage() {
     <div className="space-y-6">
       <h1 className="text-xl font-display">시스템 제어</h1>
 
-      <div className="grid grid-cols-2 gap-4">
-        <SchedulerControl />
+      <div className="grid gap-4 lg:grid-cols-3">
+        <SchedulerControl
+          target="main"
+          title="메인 스케줄러"
+          description="정규 슬롯 06:30, 12:30, 18:30에 영상 생성과 업로드를 담당합니다."
+        />
+        <SchedulerControl
+          target="recovery"
+          title="복구 스케줄러"
+          description="07:30~09:30, 13:30~15:30, 19:30~21:30에 누락 슬롯을 점검합니다."
+        />
         <ManualGenerate />
       </div>
+
+      <RecoveryActivity />
 
       <PatternManager />
 
@@ -43,6 +61,21 @@ export default function ControlPage() {
             </span>
           </CardTitle>
           <div className="flex items-center gap-2">
+            <div className="flex items-center gap-0.5 rounded-md bg-muted p-0.5">
+              {logTargets.map((item) => (
+                <button
+                  key={item.value}
+                  onClick={() => setTarget(item.value)}
+                  className={`px-2 py-0.5 rounded text-[10px] transition-colors ${
+                    target === item.value
+                      ? "bg-card text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
             <div className="flex items-center gap-0.5 rounded-md bg-muted p-0.5">
               {levels.map((l) => (
                 <button

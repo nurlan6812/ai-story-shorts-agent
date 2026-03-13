@@ -19,6 +19,25 @@ import { ko } from "date-fns/locale";
 
 type VideoWithAnalytics = Video & { analytics: Analytics | null };
 
+function getPublishPlanLabel(video: Video) {
+  const isPendingPublish =
+    video.publish_status === "ready" ||
+    video.publish_status === "queued" ||
+    video.publish_status === "uploading";
+  if (!isPendingPublish) {
+    return null;
+  }
+  if (video.publish_after) {
+    return `예약 ${format(parseISO(video.publish_after), "MM/dd HH:mm", {
+      locale: ko,
+    })}`;
+  }
+  if (video.publish_status === "ready") {
+    return "즉시 업로드";
+  }
+  return null;
+}
+
 export function VideoTable({ videos }: { videos: VideoWithAnalytics[] }) {
   if (videos.length === 0) {
     return (
@@ -85,14 +104,33 @@ export function VideoTable({ videos }: { videos: VideoWithAnalytics[] }) {
                 </Link>
               </TableCell>
               <TableCell className="text-center">
-                {v.style && (
-                  <Badge variant="outline" className="text-[9px] px-1.5">
-                    {v.style}
-                  </Badge>
-                )}
+                <div className="flex flex-col items-center gap-1">
+                  {v.style && (
+                    <Badge variant="outline" className="text-[9px] px-1.5">
+                      {v.style}
+                    </Badge>
+                  )}
+                  {(v.story_type || v.source_region) && (
+                    <span className="text-[10px] text-muted-foreground">
+                      {[v.story_type, v.source_region].filter(Boolean).join(" · ")}
+                    </span>
+                  )}
+                </div>
               </TableCell>
               <TableCell className="text-center">
-                <StatusBadge status={v.upload_status} />
+                <div className="flex flex-col items-center gap-1">
+                  <StatusBadge status={v.publish_status || "ready"} />
+                  {v.is_series && v.part_number && v.part_count && (
+                    <Badge variant="outline" className="text-[9px] px-1.5">
+                      {v.part_number}/{v.part_count}편
+                    </Badge>
+                  )}
+                  {getPublishPlanLabel(v) && (
+                    <span className="text-[10px] text-muted-foreground">
+                      {getPublishPlanLabel(v)}
+                    </span>
+                  )}
+                </div>
               </TableCell>
               <TableCell className="text-center">
                 {v.analytics ? (

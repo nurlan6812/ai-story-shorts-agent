@@ -4,13 +4,19 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { useSupabaseQuery } from "@/hooks/use-supabase-query";
-import { supabase } from "@/lib/supabase";
+import { apiFetch } from "@/lib/api";
 import type { Pattern } from "@/lib/types";
 
 const typeLabels: Record<string, string> = {
   hook: "후크",
   style: "스타일",
   topic: "토픽",
+  story_type: "스토리 유형",
+  source_region: "소스 지역",
+  series_format: "시리즈 포맷",
+  emotion: "감정 톤",
+  ending_type: "엔딩 타입",
+  scene_density: "장면 밀도",
   avoid: "회피",
   recommendation: "추천",
 };
@@ -22,10 +28,10 @@ export function PatternManager() {
   });
 
   async function togglePattern(id: string, isActive: boolean) {
-    await supabase
-      .from("patterns")
-      .update({ is_active: isActive })
-      .eq("id", id);
+    await apiFetch<{ data: Pattern }>(`/api/data/patterns/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ is_active: isActive }),
+    });
     refetch();
   }
 

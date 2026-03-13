@@ -12,10 +12,15 @@ MAX_RETRIES = 5
 RETRY_BASE_SEC = 2
 
 
-def _parse_json(text: str) -> dict | list:
-    text = text.strip()
+def _parse_json(text: str | None) -> dict | list:
+    if text is None:
+        raise ValueError("response text is empty")
+    text = str(text).strip()
+    if not text:
+        raise ValueError("response text is empty")
     if text.startswith("```"):
-        text = text.split("\n", 1)[1]
+        parts = text.split("\n", 1)
+        text = parts[1] if len(parts) > 1 else parts[0]
     if text.endswith("```"):
         text = text.rsplit("```", 1)[0]
     if text.startswith("json"):

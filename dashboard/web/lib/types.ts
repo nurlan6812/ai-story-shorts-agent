@@ -7,9 +7,21 @@ export interface Video {
   tags: string[];
   style: string;
   bgm_mood: string;
-  hook_text: string;
   summary: string;
-  upload_status: "pending" | "uploaded" | "failed";
+  generation_status: "generating" | "generated" | "failed" | null;
+  publish_status: "ready" | "queued" | "uploading" | "uploaded" | "failed" | null;
+  is_series: boolean | null;
+  series_group_id: string | null;
+  series_title: string | null;
+  part_number: number | null;
+  part_count: number | null;
+  publish_after: string | null;
+  source_fingerprint: string | null;
+  story_type: string | null;
+  source_region: string | null;
+  scene_count: number | null;
+  ending_type: string | null;
+  trigger_source: string | null;
   youtube_id: string | null;
   published_at: string | null;
   production_plan: Record<string, unknown> | null;
@@ -19,12 +31,22 @@ export interface Video {
 
 export interface Run {
   id: string;
-  run_type: "generate" | "collect_analytics" | "analyze";
+  run_type:
+    | "research"
+    | "generate"
+    | "publish"
+    | "collect_analytics"
+    | "analyze_patterns";
   status: "running" | "completed" | "failed";
   started_at: string;
   completed_at: string | null;
   video_id: string | null;
   error_message: string | null;
+  trigger_source: string | null;
+  retry_count: number | null;
+  failure_stage: string | null;
+  slot_key: string | null;
+  run_meta: Record<string, unknown> | null;
 }
 
 export interface Analytics {
@@ -48,7 +70,18 @@ export interface Analytics {
 
 export interface Pattern {
   id: string;
-  pattern_type: "hook" | "style" | "topic" | "avoid" | "recommendation";
+  pattern_type:
+    | "hook"
+    | "style"
+    | "topic"
+    | "story_type"
+    | "source_region"
+    | "series_format"
+    | "emotion"
+    | "ending_type"
+    | "scene_density"
+    | "avoid"
+    | "recommendation";
   pattern_key: string;
   pattern_data: Record<string, unknown>;
   win_rate: number;
@@ -60,10 +93,42 @@ export interface Pattern {
 
 // FastAPI 응답 타입
 
+export type SchedulerTarget = "main" | "recovery";
+export type LogTarget = "all" | SchedulerTarget;
+
 export interface SchedulerStatus {
+  target: SchedulerTarget;
+  label: string;
   running: boolean;
   pid: number | null;
+  pids: number[];
   next_run: string | null;
+  last_log_at: string | null;
+  log_path: string;
+}
+
+export interface SchedulerOverview {
+  main: SchedulerStatus;
+  recovery: SchedulerStatus;
+}
+
+export interface RecoveryActivity {
+  timestamp: string;
+  slot: string;
+  status:
+    | "verified"
+    | "retry_triggered"
+    | "completed"
+    | "failed"
+    | "skipped"
+    | "info";
+  message: string;
+  title: string | null;
+}
+
+export interface RecoveryActivityResponse {
+  activities: RecoveryActivity[];
+  total: number;
 }
 
 export interface HealthStatus {
@@ -82,9 +147,11 @@ export interface LogEntry {
   timestamp: string;
   level: string;
   message: string;
+  source: SchedulerTarget;
 }
 
 export interface LogsResponse {
   logs: LogEntry[];
   total: number;
+  target?: LogTarget;
 }

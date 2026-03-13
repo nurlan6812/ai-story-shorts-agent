@@ -1,15 +1,17 @@
 "use client";
 
 import { useApi } from "@/hooks/use-api";
-import type { SchedulerStatus, HealthStatus } from "@/lib/types";
+import type { SchedulerOverview, HealthStatus } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Circle } from "lucide-react";
 
 export function Header() {
-  const { data: scheduler } = useApi<SchedulerStatus>("/api/scheduler/status");
+  const { data: scheduler } = useApi<SchedulerOverview>("/api/scheduler/status");
   const { data: health } = useApi<HealthStatus>("/api/health/status", {
     interval: 30000,
   });
+  const main = scheduler?.main ?? null;
+  const recovery = scheduler?.recovery ?? null;
 
   return (
     <header className="sticky top-0 z-20 flex h-14 items-center justify-between border-b border-border bg-card/80 px-6 backdrop-blur">
@@ -19,11 +21,12 @@ export function Header() {
         <div className="flex items-center gap-2">
           <Circle
             className={`h-2 w-2 fill-current ${
-              scheduler?.running ? "text-emerald-400" : "text-red-400"
+              main?.running ? "text-emerald-400" : "text-red-400"
             }`}
           />
           <span className="text-xs text-muted-foreground">
-            스케줄러 {scheduler?.running ? "실행중" : "정지"}
+            메인 {main?.running ? "실행중" : "정지"} · 복구{" "}
+            {recovery?.running ? "실행중" : "정지"}
           </span>
         </div>
 

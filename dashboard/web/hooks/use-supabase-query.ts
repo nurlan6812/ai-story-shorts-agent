@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { supabase } from "@/lib/supabase";
+import { apiFetch } from "@/lib/api";
 
-interface UseSupabaseQueryOptions<T> {
+interface UseSupabaseQueryOptions {
   table: string;
   select?: string;
   order?: { column: string; ascending?: boolean };
@@ -19,35 +19,35 @@ export function useSupabaseQuery<T>({
   filter,
   limit,
   interval = 10000,
-}: UseSupabaseQueryOptions<T>) {
+}: UseSupabaseQueryOptions) {
   const [data, setData] = useState<T[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
-      let query = supabase.from(table).select(select);
+      const params = new URLSearchParams({
+        table,
+        select,
+      });
 
       if (filter) {
-        query = query.eq(filter.column, filter.value);
+        params.set("filter_column", filter.column);
+        params.set("filter_value", filter.value);
       }
       if (order) {
-        query = query.order(order.column, {
-          ascending: order.ascending ?? false,
-        });
+        params.set("order_column", order.column);
+        params.set("ascending", String(order.ascending ?? false));
       }
       if (limit) {
-        query = query.limit(limit);
+        params.set("limit", String(limit));
       }
 
-      const { data: result, error: err } = await query;
-
-      if (err) {
-        setError(err.message);
-      } else {
-        setData((result as T[]) ?? []);
-        setError(null);
-      }
+      const result = await apiFetch<{ data: T[] }>(
+        `/api/data/query?${params.toString()}`
+      );
+      setData(result.data ?? []);
+      setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "알 수 없는 오류");
     } finally {

@@ -3,6 +3,7 @@
 import json
 from google import genai
 from config.settings import GEMINI_API_KEY
+from tools.performance_feedback import build_director_feedback_block
 from tools.style_manager import load_style, list_styles
 
 client = genai.Client(api_key=GEMINI_API_KEY)
@@ -83,14 +84,14 @@ def _build_director_header(is_series_mode: bool) -> str:
 
 def _title_field_hint(is_series_mode: bool) -> str:
     if is_series_mode:
-        return '본제목 (한국어, 12자 이내 한 줄, [N/M] 금지)'
-    return '본제목 (한국어, 12자 이내 한 줄)'
+        return '본제목 (한국어, 12자 이내 한 줄, [N/M] 금지, 커뮤니티/출처 라벨 금지)'
+    return '본제목 (한국어, 12자 이내 한 줄, 커뮤니티/출처 라벨 금지)'
 
 
 def _subtitle_field_hint(is_series_mode: bool) -> str:
     if is_series_mode:
-        return '영상 부제 (한국어, 12자 이내 한 줄, 시리즈면 시리즈명 N편 형식)'
-    return '영상 부제 (한국어, 12자 이내 한 줄)'
+        return '영상 부제 (한국어, 12자 이내 한 줄, 시리즈면 시리즈명 N편 형식, 커뮤니티/출처 라벨 금지)'
+    return '영상 부제 (한국어, 12자 이내 한 줄, 커뮤니티/출처 라벨 금지)'
 
 
 def _mode_specific_rules_block(is_series_mode: bool) -> str:
@@ -113,12 +114,14 @@ def _revise_checklist_block(is_series_mode: bool) -> str:
         return (
             common
             + """
-8. 시리즈물인 경우 title은 순수 본제목이고 subtitle이 "시리즈명 N편" 형식인가"""
+8. 시리즈물인 경우 title은 순수 본제목이고 subtitle이 "시리즈명 N편" 형식인가
+9. title/subtitle/summary에 네이트판/블라인드/디시/더쿠/에타 같은 커뮤니티·출처 라벨이 없는가"""
         )
     return (
         common
         + """
-8. 단편 영상인 경우 title/subtitle에 시리즈 표기나 "N편" 문구가 없는가"""
+8. 단편 영상인 경우 title/subtitle에 시리즈 표기나 "N편" 문구가 없는가
+9. title/subtitle/summary에 네이트판/블라인드/디시/더쿠/에타 같은 커뮤니티·출처 라벨이 없는가"""
     )
 
 
@@ -145,6 +148,7 @@ def create_full_plan(
     return create_production_plan(
         research_brief=research_brief,
         style=style,
+        winning_patterns=winning_patterns,
         series_parts=series_parts,
         current_part=current_part,
         narration_seed=narration_seed,
@@ -155,6 +159,7 @@ def create_full_plan(
 def create_production_plan(
     research_brief: dict,
     style: dict,
+    winning_patterns: dict | None = None,
     series_parts: list[dict] | None = None,
     current_part: int | None = None,
     narration_seed: list[dict] | None = None,
@@ -176,6 +181,7 @@ def create_production_plan(
     camera_prefs = ", ".join(motion_cfg.get("camera", ["zoom_in", "static"]))
     transitions = ", ".join(motion_cfg.get("transitions", ["fade"]))
     show_subtitle = subtitle_cfg.get("show", True)
+    feedback_block = build_director_feedback_block(winning_patterns)
 
     bgm_block = "\n".join(f"- {k}: {v}" for k, v in BGM_CATALOG.items())
     bgm_fixed_block = ""
@@ -270,6 +276,7 @@ def create_production_plan(
 {series_characters_block}
 {narration_seed_block}
 {bgm_fixed_block}
+{feedback_block}
 
 리서치 브리프 필드 반영:
 - source_region: 한국/외국
@@ -281,6 +288,8 @@ def create_production_plan(
 - scene_outline/image_intent/action_beat는 해당 scene narration의 핵심 사건(누가, 무엇을, 왜/결과)을 시각적으로 같은 의미로 반영
 - narration이 구분한 관계 호칭(예: 여자친구/약혼녀/아버지/상사)은 scene 메타에서도 같은 인물을 가리키도록 일관되게 유지
 - 리서치 원문에는 정확한 지명/상호/학교/회사명이 있어도, 공개용 출력(title/subtitle/description/summary/tags/scene_outline/setting_hint)에서는 꼭 필요하지 않다면 일반화하세요
+- title/subtitle/summary에는 네이트판, 블라인드, 디시, 더쿠, 에타, 루리웹, 웃대 같은 커뮤니티/출처 라벨을 넣지 마세요
+- "네이트판 레전드 썰", "블라인드 썰", "디시 실화" 같은 출처형 제목/부제/요약 문구를 금지합니다
 - 장소감은 유지하되 특정성은 낮추세요 (예: "합정역" -> "서울의 한 지하철역", "맥도날드" -> "한 패스트푸드 매장")
 - 장면 전환은 narration 순서를 유지하면서 시각적 연속성 중심으로 구성
 - 같은 사건이라면 설명적인 정지 상태보다, 감정/행동/반응이 더 분명히 보이는 순간을 우선 선택
@@ -355,12 +364,13 @@ def create_production_plan(
 
 규칙:
 - narration_seed가 있으면 scene 개수/순서를 그대로 유지하고 narration 의미를 바꾸지 않음
-- narration_seed가 없으면 8~10개 장면으로 구성
+- narration_seed가 없으면 6~10개 장면으로 구성
 - bgm_mood는 {"고정값으로 유지" if fixed_bgm_mood else "장면 톤에 맞게 선택"}
 - characters.name은 영어(ASCII)만 사용
 - source_region이 외국이면 title/subtitle/summary/scene_outline에서 한국 밈/은어 사용 금지
 - source_region이 외국이면 중립 표현으로 작성
 - 공개용 출력에서는 exact real-world station/store/school/company/place names를 새로 만들거나 불필요하게 유지하지 마세요
+- 공개용 title/subtitle/summary에는 커뮤니티 출처명(예: 네이트판/블라인드/디시/더쿠/에타)을 넣지 마세요
 - image_intent는 scene_outline과 모순 없이 같은 장면을 시각적으로 강조
 - scene는 시간 순서를 지키고 같은 인물 이름을 일관되게 유지
 {_mode_specific_rules_block(is_series_mode)}

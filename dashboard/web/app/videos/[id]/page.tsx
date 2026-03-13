@@ -4,12 +4,12 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
-import { supabase } from "@/lib/supabase";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/layout/status-badge";
+import { apiFetch } from "@/lib/api";
 import {
   ArrowLeft,
   ExternalLink,
@@ -19,7 +19,6 @@ import {
   MousePointerClick,
   Clock,
   Sparkles,
-  Pencil,
   Video,
   Music,
   Hash,
@@ -38,22 +37,51 @@ export default function VideoDetailPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let cancelled = false;
+
     async function fetchData() {
-      const [videoRes, analyticsRes] = await Promise.all([
-        supabase.from("videos").select("*").eq("id", id).single(),
-        supabase
-          .from("analytics")
-          .select("*")
-          .eq("video_id", id)
-          .order("fetched_at", { ascending: false })
-          .limit(1)
-          .maybeSingle(),
-      ]);
-      setVideo(videoRes.data);
-      setAnalytics(analyticsRes.data);
-      setLoading(false);
+      try {
+        const videoParams = new URLSearchParams({
+          table: "videos",
+          filter_column: "id",
+          filter_value: id,
+          limit: "1",
+        });
+        const analyticsParams = new URLSearchParams({
+          table: "analytics",
+          filter_column: "video_id",
+          filter_value: id,
+          order_column: "fetched_at",
+          ascending: "false",
+          limit: "1",
+        });
+
+        const [videoRes, analyticsRes] = await Promise.all([
+          apiFetch<{ data: VideoType[] }>(`/api/data/query?${videoParams.toString()}`),
+          apiFetch<{ data: Analytics[] }>(
+            `/api/data/query?${analyticsParams.toString()}`
+          ),
+        ]);
+
+        if (cancelled) return;
+
+        setVideo(videoRes.data[0] || null);
+        setAnalytics(analyticsRes.data[0] || null);
+      } catch {
+        if (cancelled) return;
+        setVideo(null);
+        setAnalytics(null);
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
     }
+
     fetchData();
+    return () => {
+      cancelled = true;
+    };
   }, [id]);
 
   if (loading) {
@@ -81,6 +109,14 @@ export default function VideoDetailPage() {
   const durationLabel = analytics?.duration_seconds
     ? `${Math.floor(analytics.duration_seconds / 60)}:${String(analytics.duration_seconds % 60).padStart(2, "0")}`
     : "0:59";
+  const publishedDate = video.published_at ? parseISO(video.published_at) : null;
+  const headerTimestampLabel = publishedDate
+    ? format(publishedDate, "yyyy년 MM월 dd일 HH:mm 업로드", {
+        locale: ko,
+      })
+    : format(createdDate, "yyyy년 MM월 dd일 HH:mm 생성", {
+        locale: ko,
+      });
 
   // 참여율 계산
   const engagementRate =
@@ -108,10 +144,6 @@ export default function VideoDetailPage() {
             </span>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm">
-              <Pencil className="h-3.5 w-3.5" />
-              수정하기
-            </Button>
             {video.youtube_id && (
               <Button variant="outline" size="sm" asChild>
                 <a
@@ -131,11 +163,9 @@ export default function VideoDetailPage() {
         <div>
           <h1 className="text-xl font-display">{video.title}</h1>
           <div className="flex items-center gap-2 mt-1.5">
-            <StatusBadge status={video.upload_status} />
+            <StatusBadge status={video.publish_status || "ready"} />
             <span className="text-xs text-muted-foreground">
-              {format(createdDate, "yyyy년 MM월 dd일 HH:mm 업로드", {
-                locale: ko,
-              })}
+              {headerTimestampLabel}
             </span>
           </div>
         </div>
@@ -205,6 +235,72 @@ export default function VideoDetailPage() {
                     </div>
                   </div>
 
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+                        스토리 메타
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {video.story_type && (
+                          <Badge variant="secondary" className="text-[11px] bg-[#1a1a1a] border border-border">
+                            {video.story_type}
+                          </Badge>
+                        )}
+                        {video.source_region && (
+                          <Badge variant="secondary" className="text-[11px] bg-[#1a1a1a] border border-border">
+                            {video.source_region}
+                          </Badge>
+                        )}
+                        <Badge variant="secondary" className="text-[11px] bg-[#1a1a1a] border border-border">
+                          {video.is_series ? "시리즈" : "단편"}
+                        </Badge>
+                        {video.ending_type && (
+                          <Badge variant="secondary" className="text-[11px] bg-[#1a1a1a] border border-border">
+                            {video.ending_type}
+                          </Badge>
+                        )}
+                      </div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+                        운영 상태
+                      </p>
+                      <div className="space-y-1 text-xs text-foreground/80">
+                        <p>생성 상태: {video.generation_status || "미지정"}</p>
+                        <p>업로드 상태: {video.publish_status || "미지정"}</p>
+                        <p>트리거: {video.trigger_source || "manual"}</p>
+                        {video.publish_after && (
+                          <p>
+                            예약 시각: {format(parseISO(video.publish_after), "yyyy-MM-dd HH:mm", { locale: ko })}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+                        시리즈 정보
+                      </p>
+                      <div className="space-y-1 text-xs text-foreground/80">
+                        <p>
+                          파트: {video.part_number && video.part_count ? `${video.part_number}/${video.part_count}` : "단편"}
+                        </p>
+                        <p>시리즈 제목: {video.series_title || "-"}</p>
+                      </div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+                        제작 메타
+                      </p>
+                      <div className="space-y-1 text-xs text-foreground/80">
+                        <p>장면 수: {video.scene_count || "-"}</p>
+                        <p>소스 지문: {video.source_fingerprint ? `${video.source_fingerprint.slice(0, 12)}...` : "-"}</p>
+                      </div>
+                    </div>
+                  </div>
+
                   {/* 핵심 요약 */}
                   <div className="space-y-1.5">
                     <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
@@ -212,7 +308,7 @@ export default function VideoDetailPage() {
                     </p>
                     <div className="rounded-lg border border-border bg-[#0a0a0a] p-3.5">
                       <p className="text-sm leading-relaxed text-foreground/90">
-                        {video.summary || video.hook_text || "요약 정보 없음"}
+                        {video.summary || "요약 정보 없음"}
                       </p>
                     </div>
                   </div>

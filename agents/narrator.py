@@ -1,15 +1,19 @@
 """Narration Agent - Gemini 기반 장면별 내레이션 생성기"""
 
 import json
+import re
 from google import genai
 from config.settings import GEMINI_API_KEY
 from tools.style_manager import list_styles, load_style
+from tools.performance_feedback import build_narrator_feedback_block
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 MODEL = "gemini-3.1-pro-preview"
 MAX_RETRIES = 5
-MIN_SCENES = 8
+MIN_SCENES = 6
 MAX_SCENES = 10
+MAX_NARRATION_CHARS = 65
+MAX_NARRATION_SENTENCES = 2
 
 BGM_OPTIONS = {
     "funny": "가볍고 코믹한 분위기",
@@ -118,6 +122,45 @@ def _looks_like_meta_ending(text: str) -> bool:
     return any(marker in cleaned for marker in META_ENDING_MARKERS)
 
 
+def _find_narration_length_error(
+    scenes: list[dict],
+    *,
+    part_label: str | None = None,
+) -> str | None:
+    for idx, scene in enumerate(scenes, start=1):
+        narration = str(scene.get("narration", "")).strip()
+        length = len(narration)
+        prefix = f"{part_label} " if part_label else ""
+        if not narration:
+            return f"{prefix}scene {idx} narration is empty"
+        if length > MAX_NARRATION_CHARS:
+            return (
+                f"{prefix}scene {idx} narration length {length} "
+                f"(need <= {MAX_NARRATION_CHARS} chars)"
+            )
+
+        sentence_count = _count_sentence_like_units(narration)
+        if sentence_count < 1 or sentence_count > MAX_NARRATION_SENTENCES:
+            return (
+                f"{prefix}scene {idx} narration sentence count {sentence_count} "
+                f"(need 1~{MAX_NARRATION_SENTENCES} sentences)"
+            )
+    return None
+
+
+def _count_sentence_like_units(text: str) -> int:
+    normalized = re.sub(r"\s+", " ", str(text or "").strip())
+    if not normalized:
+        return 0
+
+    parts = [
+        part.strip()
+        for part in re.split(r"[.!?！？…]+", normalized)
+        if part.strip()
+    ]
+    return len(parts) if parts else 1
+
+
 def _collect_characters(data: dict) -> list[dict]:
     if not isinstance(data, dict):
         return []
@@ -203,6 +246,7 @@ def generate_narration_plan(
     research_brief: dict,
     forced_style_name: str | None = None,
     forced_bgm_mood: str | None = None,
+    winning_patterns: dict | None = None,
 ) -> dict:
     """단편/단일 에피소드용 선행 나레이션+씬 시드 + 스타일/BGM을 생성한다."""
     rb = research_brief or {}
@@ -220,6 +264,7 @@ def generate_narration_plan(
         default_bgm = _normalize_bgm_mood(forced_bgm_mood, default_bgm)
 
     styles_block, bgm_block = _build_style_and_bgm_blocks(style_names)
+    feedback_block = build_narrator_feedback_block(winning_patterns)
 
     original_story = str(rb.get("original_story", "")).strip()
 
@@ -244,19 +289,21 @@ Core requirements:
 - Make the episode easy to follow, immersive, and compelling as a YouTube Shorts narrative.
 - Preserve factual anchors from original_title/original_story while retelling in natural Korean.
 - Research may contain exact real-world names, but public-facing narration/scene text should usually generalize overly specific station/store/school/company/place names unless that specificity is essential to understanding the story.
-- Choose {MIN_SCENES}~{MAX_SCENES} scenes based on the actual story. Prefer 9~10 scenes unless the story is truly simple.
+- Choose {MIN_SCENES}~{MAX_SCENES} scenes based on the actual story's density, turning points, and payoff structure.
 - Aim for roughly 45~58 seconds total by balancing scene count and narration density.
 - Use natural spoken Korean. Avoid stiff written tone.
-- Keep narration concise but not overly compressed. Let each scene breathe naturally when the story needs it.
+- Keep narration concise. Let each scene breathe naturally when the story needs it.
+- Keep every scene narration to 1~2 Korean sentences, within {MAX_NARRATION_CHARS} Korean characters.
 - If you include direct quoted speech, write it as natural spoken Korean that could actually be said aloud, not dictionary-form or citation-style wording.
 - If a quote is not important as a direct spoken line, prefer paraphrasing it smoothly into narration instead of preserving stiff quoted wording from the source.
 - Prefer lightly generalized public wording such as "서울의 한 지하철역", "한 패스트푸드 매장", "회사" instead of exposing exact identifiable real-world place or brand names from the source.
 - Choose narrative person (1인칭/3인칭) that best fits the story and keep it mostly consistent.
 - Keep relationship labels consistent across scenes. Do not confuse girlfriend, fiancee, wife, husband, mother, father, boss, coworker, etc.
-- Ensure each scene adds meaningful progression (new info, escalation, consequence, emotional turn, or payoff setup).
-- Build pacing from this story's own tension/payoff; avoid generic boilerplate beats.
 - Avoid repetitive sentence openings/patterns across scenes.
 - Do not copy long phrases from original_story verbatim.
+- Ensure each scene adds meaningful progression (new info, escalation, consequence, emotional turn, or payoff setup).
+- Build pacing from this story's own tension/payoff; avoid generic boilerplate beats.
+{feedback_block}
 
 Ending rules:
 - The final scene should end on story payoff and a short aftermath, aftershock, or emotional landing inside the story world.
@@ -280,7 +327,7 @@ Forced constraints:
 
 For each scene, output:
 - index: 0-based
-- narration: Korean 1~2 sentences
+- narration: Korean, 1~2 sentences, max {MAX_NARRATION_CHARS} characters
 - scene_outline: Korean 1 sentence factual summary
 - image_intent: Korean short visual focus
 - setting_hint: Korean short place/time/era cue
@@ -329,7 +376,11 @@ Return JSON only:
                 elif _looks_like_meta_ending(last_narration):
                     last_error = f"final-scene narration is too meta/generic: {last_narration}"
                 else:
-                    return plan
+                    length_error = _find_narration_length_error(seed_scenes)
+                    if length_error:
+                        last_error = length_error
+                    else:
+                        return plan
             if not last_error:
                 last_error = (
                     f"invalid scene count: {len(seed_scenes)} "
@@ -339,6 +390,7 @@ Return JSON only:
                 f"{prompt}\n\n"
                 f"Your previous output was invalid ({last_error}). "
                 f"Return strict JSON with style, bgm_mood, and {MIN_SCENES}~{MAX_SCENES} complete scenes. "
+                f"Every scene narration must be 1~{MAX_NARRATION_SENTENCES} short sentences and <= {MAX_NARRATION_CHARS} characters. "
                 "End the final scene on story payoff/aftershock inside the story world, not on a meta label or commentary."
             )
         except Exception as e:
@@ -358,6 +410,7 @@ def generate_series_narration_plan(
     research_brief: dict,
     forced_style_name: str | None = None,
     forced_bgm_mood: str | None = None,
+    winning_patterns: dict | None = None,
 ) -> dict:
     """시리즈(다편)용: part 구조(part_focus/cliffhanger) + 전편 시드를 한 번에 생성한다."""
     rb = research_brief or {}
@@ -385,6 +438,7 @@ def generate_series_narration_plan(
         default_bgm = _normalize_bgm_mood(forced_bgm_mood, default_bgm)
 
     styles_block, bgm_block = _build_style_and_bgm_blocks(style_names)
+    feedback_block = build_narrator_feedback_block(winning_patterns)
 
     parts_hint = rb.get("series_parts", [])
     if not isinstance(parts_hint, list):
@@ -429,10 +483,11 @@ Core requirements:
 Global rules:
 - Decide series_total_parts as 2 or 3 based on story density (recommended: {recommended_parts}).
 - Output exactly series_total_parts parts, numbered 1..series_total_parts.
-- For each part, choose {MIN_SCENES}~{MAX_SCENES} scenes based on that part's actual event density and pacing. Prefer 8~9 scenes unless the part is clearly event-dense.
+- For each part, choose {MIN_SCENES}~{MAX_SCENES} scenes based on that part's actual event density, pacing, and turning points.
 - Aim for roughly 40~55 seconds per part by balancing scene count and narration density.
 - Use natural spoken Korean (not stiff written tone).
-- Keep narration concise but not overly compressed. Let each scene breathe naturally when the story needs it.
+- Keep narration concise. Let each scene breathe naturally when the story needs it.
+- Keep every scene narration to 1~2 Korean sentences, within {MAX_NARRATION_CHARS} Korean characters.
 - If you include direct quoted speech, write it as natural spoken Korean that could actually be said aloud, not dictionary-form or citation-style wording.
 - If a quote is not important as a direct spoken line, prefer paraphrasing it smoothly into narration instead of preserving stiff quoted wording from the source.
 - Prefer lightly generalized public wording such as "서울의 한 지하철역", "한 패스트푸드 매장", "회사" instead of exposing exact identifiable real-world place or brand names from the source.
@@ -442,6 +497,7 @@ Global rules:
 - Do not copy long phrases from original_story verbatim.
 - You are an expert Shorts storyteller. Design each part to maximize viewer retention and next-part intent for this specific story.
 - Ensure every scene contributes meaningful progress (information, tension, consequence, emotional shift, or payoff setup).
+{feedback_block}
 
 Character pool rules:
 - Identify the core recurring characters across the whole series before planning parts.
@@ -487,7 +543,7 @@ Forced constraints:
 
 For each scene in each part, output:
 - index: 0-based
-- narration: Korean 1~2 sentences
+- narration: Korean, 1~2 sentences, max {MAX_NARRATION_CHARS} characters
 - scene_outline: Korean 1 sentence factual summary
 - image_intent: Korean short visual focus
 - setting_hint: Korean short place/time/era cue
@@ -582,6 +638,14 @@ Return JSON only:
                         valid = False
                         last_error = f"invalid scene count for part {idx}: {scene_count}"
                         break
+                    length_error = _find_narration_length_error(
+                        part.get("scenes", []),
+                        part_label=f"part {idx}",
+                    )
+                    if length_error:
+                        valid = False
+                        last_error = length_error
+                        break
                     cliffhanger = part.get("cliffhanger")
                     if idx < total_parts:
                         cliff_text = str(cliffhanger or "").strip()
@@ -638,6 +702,7 @@ Return JSON only:
                 f"Your previous output was invalid ({last_error}). "
                 "Return strict JSON only. Keep part numbering 1..N, "
                 f"{MIN_SCENES}~{MAX_SCENES} scenes per part, make non-final cliffhangers specific/curiosity-driven, "
+                f"keep every scene narration to 1~{MAX_NARRATION_SENTENCES} short sentences and <= {MAX_NARRATION_CHARS} characters, "
                 "ensure the last narration of each non-final part itself ends on the cliffhanger beat, "
                 "and ensure the final part ends on payoff/aftershock inside the story world rather than a meta label or commentary."
             )

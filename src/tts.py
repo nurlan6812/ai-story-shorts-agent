@@ -21,6 +21,14 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 
 FLASH_TTS_MODEL = "gemini-2.5-flash-preview-tts"
 PRO_TTS_MODEL = "gemini-2.5-pro-preview-tts"
+QUOTE_PAIRS = [
+    ('"', '"'),
+    ("'", "'"),
+    ("“", "”"),
+    ("‘", "’"),
+    ("「", "」"),
+    ("『", "』"),
+]
 
 
 def _save_wav(output_path: Path, pcm_data: bytes, rate: int = 24000):
@@ -88,10 +96,36 @@ def _build_tts_contents(text: str, delivery_instruction: str | None) -> str:
         "TTS task:\n"
         "- Apply style guidance silently.\n"
         "- Never read instruction text.\n"
-        "- Speak only the SCRIPT content.\n\n"
+        "- Speak only the SCRIPT content.\n"
+        "- Articulate Korean syllables, particles, and sentence endings clearly.\n"
+        "- Do not swallow short question endings or final vowels.\n\n"
         f"STYLE_GUIDANCE:\n{style_hint}\n\n"
         f"SCRIPT:\n{script}"
     )
+
+
+def _fixed_narrator_delivery_hint() -> str:
+    """Narrator는 장면별 감정 연기 대신 일관된 쇼츠 스토리텔러 톤을 유지한다."""
+    return (
+        "Speak as a consistent Korean Shorts storyteller. "
+        "Keep the tone clear, engaging, and easy to follow across all scenes. "
+        "Use natural pacing and light emphasis to support tension or payoff, "
+        "but do not act as a character, imitate character voices, or overperform emotion. "
+        "Pronounce Korean syllables, particles, and sentence endings fully and clearly."
+    )
+
+
+def _strip_outer_quotes_for_tts(text: str, seg_type: str) -> str:
+    script = str(text or "").strip()
+    if seg_type != "dialogue" or not script:
+        return script
+
+    for left, right in QUOTE_PAIRS:
+        if script.startswith(left) and script.endswith(right):
+            inner = script[len(left):len(script) - len(right)].strip()
+            if inner:
+                return inner
+    return script
 
 
 def generate_tts(
@@ -273,6 +307,7 @@ def _normalize_speech_segments(raw: Any) -> list[dict]:
             {
                 "type": str(item.get("type", "narration")).strip() or "narration",
                 "speaker": str(item.get("speaker", "narrator")).strip() or "narrator",
+                "voice_profile": str(item.get("voice_profile", "")).strip(),
                 "text": text,
                 "delivery_hint": str(item.get("delivery_hint", "")).strip(),
             }
@@ -307,9 +342,12 @@ def generate_scene_tts(
                 speaker = seg["speaker"]
                 voice = str(vm.get(speaker, vm.get("narrator", TTS_NARRATOR_VOICE))).strip() or TTS_NARRATOR_VOICE
                 delivery_hint = str(seg.get("delivery_hint", "")).strip()
+                if speaker == "narrator":
+                    delivery_hint = _fixed_narrator_delivery_hint()
+                tts_text = _strip_outer_quotes_for_tts(seg["text"], seg["type"])
                 try:
                     tts_result = generate_tts(
-                        seg["text"],
+                        tts_text,
                         seg_path,
                         voice_name=voice,
                         delivery_instruction=delivery_hint,
@@ -318,7 +356,7 @@ def generate_scene_tts(
                     if voice != TTS_NARRATOR_VOICE:
                         voice = TTS_NARRATOR_VOICE
                         tts_result = generate_tts(
-                            seg["text"],
+                            tts_text,
                             seg_path,
                             voice_name=voice,
                             delivery_instruction=delivery_hint,
@@ -331,6 +369,7 @@ def generate_scene_tts(
                         "index": j,
                         "speaker": speaker,
                         "voice": voice,
+                        "voice_profile": str(seg.get("voice_profile", "")).strip(),
                         "type": seg["type"],
                         "text": seg["text"],
                     }

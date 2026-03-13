@@ -1,14 +1,22 @@
 """유머/썰/사연 YouTube Shorts 자동 생성 파이프라인 (스타일 시스템 + Director/Critic)"""
 
 import argparse
+import hashlib
 import json
 import re
+import uuid
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from PIL import Image
-from config.settings import OUTPUT_DIR, UPLOAD_QUEUE_DIR, MAX_CRITIC_REVISIONS, IMAGE_WORKERS
+from config.settings import (
+    OUTPUT_DIR,
+    UPLOAD_QUEUE_DIR,
+    MAX_CRITIC_REVISIONS,
+    IMAGE_WORKERS,
+    YOUTUBE_DEFAULT_PRIVACY,
+)
 from agents.researcher import research
 from agents.director import create_full_plan, create_production_plan, revise_plan
 from agents.imager import generate_image_queries
@@ -38,12 +46,223 @@ from tools.video_composer import (
 COMPARE_STYLES = ["casual", "storytelling", "darkcomedy", "absurdist"]
 SERIES_TAG_RE = re.compile(r"\[\s*\d+\s*/\s*\d+\s*\]")
 SERIES_PART_RE = re.compile(r"\b\d+\s*편\b")
+COMMUNITY_SOURCE_RE = re.compile(
+    r"(?:네이트\s*판|네이트판|블라인드|팀블라인드|디시인사이드|디시|더쿠|에브리타임|에타|"
+    r"루리웹|웃긴대학|웃대|보배드림|인스티즈|맘카페|다음카페|dcinside|dc)",
+    re.IGNORECASE,
+)
+GENERIC_SOURCE_TITLE_RE = re.compile(
+    r"^(?:레전드|(?:레전드\s*)?(?:썰|사연|후기|실화|모음))(?:\s*모음)?$"
+)
+AUTO_PUBLISH_HOURS = (6, 12, 18)
+AUTO_PUBLISH_MINUTE = 30
+KST = timezone(timedelta(hours=9))
 
 
 def _safe_filename(name: str) -> str:
     """파일명에 사용할 수 없는 문자 제거 (이모지, 특수문자)"""
     cleaned = re.sub(r'[^\w\s가-힣a-zA-Z0-9\-]', '', name)
     return cleaned.strip()[:80]
+
+
+def _normalize_fingerprint_text(text: str) -> str:
+    text = str(text or "").strip().lower()
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+
+def _strip_community_source_label(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+
+    cleaned = COMMUNITY_SOURCE_RE.sub("", raw)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    cleaned = cleaned.strip(" -:|/[]()")
+
+    if COMMUNITY_SOURCE_RE.search(raw):
+        cleaned = re.sub(r"^(?:레전드\s*)?(?:썰|사연|후기|실화|모음)\b", "", cleaned).strip(" -:|/[]()")
+        cleaned = re.sub(r"\b(?:레전드\s*)?(?:썰|사연|후기|실화|모음)$", "", cleaned).strip(" -:|/[]()")
+        cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+
+    return cleaned
+
+
+def _is_generic_source_title(text: str) -> bool:
+    normalized = str(text or "").strip()
+    normalized = re.sub(r"\s+", " ", normalized)
+    return bool(GENERIC_SOURCE_TITLE_RE.fullmatch(normalized))
+
+
+def _sanitize_public_titles(script: dict) -> dict:
+    if not isinstance(script, dict):
+        return script
+
+    title_raw = str(script.get("title", "")).strip()
+    subtitle_raw = str(script.get("subtitle", "")).strip()
+    summary_raw = str(script.get("summary", "")).strip()
+
+    title = _strip_community_source_label(title_raw)
+    subtitle = _strip_community_source_label(subtitle_raw)
+    summary = _strip_community_source_label(summary_raw)
+
+    first_scene = ""
+    scenes = script.get("scenes", [])
+    if isinstance(scenes, list) and scenes:
+        first = scenes[0]
+        if isinstance(first, dict):
+            first_scene = str(first.get("narration", "")).strip()
+    first_scene = _strip_community_source_label(first_scene)
+
+    if not title or _is_generic_source_title(title):
+        fallback = summary or first_scene or "무제"
+        fallback = re.sub(r"[.!?~]+$", "", fallback).strip()
+        title = fallback[:12].strip() or "무제"
+
+    if _is_generic_source_title(subtitle):
+        subtitle = ""
+    if _is_generic_source_title(summary):
+        summary = ""
+
+    script["title"] = title or title_raw
+    script["subtitle"] = subtitle
+    script["summary"] = summary
+    return script
+
+
+def _compute_source_fingerprint(research_brief: dict | None) -> str | None:
+    if not isinstance(research_brief, dict):
+        return None
+    parts = [
+        _normalize_fingerprint_text(research_brief.get("source_region", "")),
+        _normalize_fingerprint_text(research_brief.get("original_title", "")),
+        _normalize_fingerprint_text(research_brief.get("original_story", "")),
+    ]
+    joined = " || ".join(p for p in parts if p)
+    if not joined:
+        return None
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
+
+
+def _detect_ending_type(script: dict, series_part: int | None, series_total: int | None) -> str:
+    if series_part and series_total and series_part < series_total:
+        return "cliffhanger"
+
+    last_narration = ""
+    scenes = script.get("scenes", []) if isinstance(script, dict) else []
+    if isinstance(scenes, list) and scenes:
+        last = scenes[-1]
+        if isinstance(last, dict):
+            last_narration = str(last.get("narration", "")).strip()
+
+    if any(token in last_narration for token in ("그날 이후", "이후로", "결국", "그 뒤로")):
+        return "aftershock"
+    return "payoff"
+
+
+def _next_publish_slot(after_kst: datetime, step: int = 0) -> datetime:
+    slots = [
+        after_kst.replace(
+            hour=hour,
+            minute=AUTO_PUBLISH_MINUTE,
+            second=0,
+            microsecond=0,
+        )
+        for hour in AUTO_PUBLISH_HOURS
+    ]
+    future = [slot for slot in slots if slot > after_kst]
+    if not future:
+        base = (after_kst + timedelta(days=1)).replace(
+            hour=AUTO_PUBLISH_HOURS[0],
+            minute=AUTO_PUBLISH_MINUTE,
+            second=0,
+            microsecond=0,
+        )
+        future = [base]
+    slot = future[0]
+    if step <= 0:
+        return slot
+    current = slot
+    for _ in range(step):
+        current = _next_publish_slot(current + timedelta(minutes=1))
+    return current
+
+
+def _build_video_record_fields(
+    metadata: dict,
+    publish_status: str,
+    trigger_source: str,
+    publish_after: str | None = None,
+) -> dict:
+    research_brief = metadata.get("research_brief") if isinstance(metadata, dict) else {}
+    production_plan = metadata.get("production_plan") if isinstance(metadata, dict) else {}
+    is_series = bool(metadata.get("series_total") and int(metadata.get("series_total") or 0) > 1)
+    scene_count = None
+    if isinstance(production_plan, dict):
+        scenes = production_plan.get("scenes", [])
+        if isinstance(scenes, list):
+            scene_count = len(scenes)
+
+    return {
+        "title": metadata.get("title", "YouTube Shorts"),
+        "description": metadata.get("description", ""),
+        "tags": metadata.get("tags", []),
+        "style": metadata.get("style", ""),
+        "bgm_mood": metadata.get("bgm_mood", ""),
+        "summary": metadata.get("summary", ""),
+        "generation_status": metadata.get("generation_status", "generated"),
+        "publish_status": publish_status,
+        "is_series": is_series,
+        "series_group_id": metadata.get("series_group_id"),
+        "series_title": metadata.get("series_title") or metadata.get("title", ""),
+        "part_number": metadata.get("series_part"),
+        "part_count": metadata.get("series_total"),
+        "publish_after": publish_after or metadata.get("publish_after"),
+        "source_fingerprint": metadata.get("source_fingerprint"),
+        "story_type": research_brief.get("story_type") if isinstance(research_brief, dict) else None,
+        "source_region": research_brief.get("source_region") if isinstance(research_brief, dict) else None,
+        "scene_count": scene_count,
+        "ending_type": metadata.get("ending_type"),
+        "trigger_source": trigger_source,
+        "production_plan": production_plan,
+        "research_brief": research_brief,
+    }
+
+
+def _register_generated_video(
+    metadata: dict,
+    publish_status: str,
+    trigger_source: str,
+    publish_after: str | None = None,
+) -> dict | None:
+    from tools.supabase_client import insert_video, update_video
+
+    payload = _build_video_record_fields(
+        metadata=metadata,
+        publish_status=publish_status,
+        trigger_source=trigger_source,
+        publish_after=publish_after,
+    )
+    video_id = str(metadata.get("video_id", "")).strip()
+    if video_id:
+        record = update_video(video_id, **payload)
+    else:
+        record = insert_video(**payload)
+        if record and record.get("id"):
+            metadata["video_id"] = record["id"]
+    if publish_after:
+        metadata["publish_after"] = publish_after
+    metadata["publish_status"] = publish_status
+    return record
+
+
+def _find_recent_duplicate_story(research_brief: dict, days: int = 45) -> dict | None:
+    from tools.supabase_client import find_recent_video_by_source_fingerprint
+
+    fingerprint = _compute_source_fingerprint(research_brief)
+    if not fingerprint:
+        return None
+    return find_recent_video_by_source_fingerprint(fingerprint, days=days)
 
 
 def _sanitize_plan(plan: dict) -> dict:
@@ -340,6 +559,24 @@ def _normalize_series_title_subtitle(
     return script
 
 
+def _build_youtube_upload_title(metadata: dict) -> str:
+    """유튜브 업로드용 제목 구성.
+
+    렌더 title/subtitle는 유지하고, 시리즈인 경우 업로드 제목에만 [N/M] 표기를 붙인다.
+    """
+    base_title = str(metadata.get("title", "")).strip() or "YouTube Shorts"
+    series_part = metadata.get("series_part")
+    series_total = metadata.get("series_total")
+
+    if not (series_part and series_total and int(series_total) > 1):
+        return base_title
+
+    clean_title = SERIES_TAG_RE.sub("", base_title).strip()
+    clean_title = SERIES_PART_RE.sub("", clean_title).strip()
+    clean_title = clean_title or base_title
+    return f"{clean_title} [{series_part}/{series_total}]".strip()
+
+
 def _build_image_query(base_query: str, style: dict) -> str:
     """스타일의 image.prompt_prefix/suffix를 이미지 쿼리에 결합 (중복 방지)"""
     image_cfg = style.get("image", {})
@@ -543,6 +780,7 @@ def _generate_plan_with_critic(
         plan = create_production_plan(
             research_brief,
             style,
+            winning_patterns=winning_patterns,
             series_parts=series_parts,
             current_part=current_part,
             narration_seed=narration_seed,
@@ -625,7 +863,7 @@ def _generate_character_sheet(characters: list[dict], style: dict, work_dir: Pat
 
 
 # ============================================================
-# 이미지 소싱 (병렬)
+# 이미지 소싱 (순차/병렬)
 # ============================================================
 
 def _source_scene_images(
@@ -642,7 +880,11 @@ def _source_scene_images(
     previous_part_reference_notes_map: dict[int, dict[int, str]] | None = None,
     previous_part_image_map: dict[int, Path] | None = None,
 ) -> list[Path | None]:
-    """장면별 이미지 병렬 소싱 (ThreadPoolExecutor)"""
+    """장면별 이미지 소싱.
+
+    - use_prev_scene_reference=True: 순차 생성
+    - use_prev_scene_reference=False: 병렬 생성(ThreadPoolExecutor)
+    """
     raw_images_dir.mkdir(parents=True, exist_ok=True)
     results: list[Path | None] = [None] * len(scenes)
     max_reference_images = 3
@@ -1047,6 +1289,7 @@ def run_pipeline_single(
                 research_brief=research_brief,
                 forced_style_name=style_name if style_name else None,
                 forced_bgm_mood=None,
+                winning_patterns=winning_patterns,
             )
             narration_seed = list(narration_plan.get("scenes", []))
             style_name = str(narration_plan.get("style", style_name or "casual")).strip() or "casual"
@@ -1063,6 +1306,7 @@ def run_pipeline_single(
         print(f"[2] Director 플랜 생성 중... (스타일: {style_name}, BGM: {bgm_mood}){part_label}")
         plan = _generate_plan_with_critic(
             research_brief, style, work_dir, no_critic=no_critic,
+            winning_patterns=winning_patterns,
             series_parts=series_parts,
             current_part=current_part,
             narration_seed=narration_seed,
@@ -1098,6 +1342,7 @@ def run_pipeline_single(
     )
     script["scenes"] = scenes
     script["voice_map"] = voice_map
+    script = _sanitize_public_titles(script)
     script = _normalize_series_title_subtitle(
         script,
         series_part,
@@ -1122,8 +1367,8 @@ def run_pipeline_single(
             characters, style, work_dir,
         )
 
-    # 2. 이미지 소싱 (병렬, 스타일 prompt_prefix/suffix 적용)
-    print(f"[2] 이미지 소싱 중... (병렬 {IMAGE_WORKERS} workers, 스타일: {style_name})")
+    # 2. 이미지 소싱 (순차, 이전 장면/캐릭터 시트 참조 적용)
+    print(f"[2] 이미지 소싱 중... (순차 생성, 스타일: {style_name})")
     raw_images_dir = work_dir / "raw_images"
     is_multi_part_series = bool(series_parts and len(series_parts) > 1)
     has_prev_context = bool(previous_part_scenes and previous_part_image_map)
@@ -1287,12 +1532,17 @@ def run_pipeline_single(
         "tags": script.get("tags", []),
         "style": style_name,
         "bgm_mood": mood,
+        "bgm_used": bool(bgm_path and bgm_path.exists()),
+        "bgm_path": str(bgm_path) if bgm_path else "",
         "summary": script.get("summary", ""),
         "work_dir": str(work_dir),
         "production_plan": script,
         "research_brief": research_brief,
         "series_part": series_part,
         "series_total": series_total,
+        "source_fingerprint": _compute_source_fingerprint(research_brief),
+        "ending_type": _detect_ending_type(script, series_part, series_total),
+        "generation_status": "generated",
         "character_sheet_path": str(character_sheet_path) if has_sheet else None,
         "voice_map": voice_map,
     }
@@ -1346,6 +1596,7 @@ def run_pipeline_compare(
             research_brief=research_brief,
             forced_style_name=None,
             forced_bgm_mood=None,
+            winning_patterns=winning_patterns,
         )
         narration_seed = list(narration_plan.get("scenes", []))
         selected_style_name = str(narration_plan.get("style", "casual")).strip() or "casual"
@@ -1366,6 +1617,7 @@ def run_pipeline_compare(
             selected_style,
             work_dir,
             no_critic=no_critic,
+            winning_patterns=winning_patterns,
             narration_seed=narration_seed,
             fixed_bgm_mood=bgm_mood,
         )
@@ -1533,10 +1785,17 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _handle_upload(final_video: Path, metadata: dict, dry_run: bool = False):
+def _handle_upload(
+    final_video: Path,
+    metadata: dict,
+    dry_run: bool = False,
+    trigger_source: str = "manual",
+    retry_count: int = 0,
+    slot_key: str | None = None,
+):
     """영상 업로드 + Supabase 기록"""
     from tools.youtube_uploader import upload_video, build_shorts_description, check_daily_quota_remaining
-    from tools.supabase_client import insert_video, update_video_status, insert_run, update_run
+    from tools.supabase_client import update_video_status, insert_run, update_run
 
     # 쿼터 확인
     quota = check_daily_quota_remaining()
@@ -1547,35 +1806,51 @@ def _handle_upload(final_video: Path, metadata: dict, dry_run: bool = False):
 
     # 설명 생성
     description = build_shorts_description(metadata.get("production_plan", metadata))
-    title = metadata.get("title", "YouTube Shorts")
+    render_title = metadata.get("title", "YouTube Shorts")
+    upload_title = _build_youtube_upload_title(metadata)
     tags = metadata.get("tags", [])
 
     print(f"\n[업로드 정보]")
-    print(f"  제목: {title}")
+    print(f"  렌더 제목: {render_title}")
+    print(f"  업로드 제목: {upload_title}")
     print(f"  태그: {', '.join(tags)}")
     print(f"  파일: {final_video}")
+    print(f"  공개 상태: {YOUTUBE_DEFAULT_PRIVACY}")
     print(f"  설명:\n{description[:200]}...")
+
+    metadata["description"] = description
 
     if dry_run:
         print("\n[Dry Run] 실제 업로드를 건너뜁니다.")
         return
 
-    # Supabase 기록 (영상 레코드)
-    video_record = insert_video(
-        title=title,
-        description=description,
-        tags=tags,
-        style=metadata.get("style", ""),
-        bgm_mood=metadata.get("bgm_mood", ""),
-        summary=metadata.get("summary", ""),
-        upload_status="pending",
-        production_plan=metadata.get("production_plan"),
-        research_brief=metadata.get("research_brief"),
+    # Supabase 기록 (생성 완료 레코드 보장)
+    video_record = _register_generated_video(
+        metadata=metadata,
+        publish_status=metadata.get("publish_status", "ready") or "ready",
+        trigger_source=trigger_source,
     )
     video_id = video_record["id"] if video_record else None
+    if video_id:
+        update_video_status(
+            video_id,
+            publish_status="uploading",
+        )
 
     # 실행 기록
-    run_record = insert_run(run_type="generate", video_id=video_id)
+    run_record = insert_run(
+        run_type="publish",
+        video_id=video_id,
+        trigger_source=trigger_source,
+        retry_count=retry_count,
+        slot_key=slot_key,
+        run_meta={
+            "title": render_title,
+            "upload_title": upload_title,
+            "series_part": metadata.get("series_part"),
+            "series_total": metadata.get("series_total"),
+        },
+    )
     run_id = run_record["id"] if run_record else None
 
     try:
@@ -1583,10 +1858,10 @@ def _handle_upload(final_video: Path, metadata: dict, dry_run: bool = False):
         print(f"\n[6] YouTube 업로드 중...")
         result = upload_video(
             video_path=final_video,
-            title=title,
+            title=upload_title,
             description=description,
             tags=tags,
-            privacy_status="public",
+            privacy_status=YOUTUBE_DEFAULT_PRIVACY,
         )
 
         print(f"  -> YouTube ID: {result['youtube_id']}")
@@ -1596,7 +1871,7 @@ def _handle_upload(final_video: Path, metadata: dict, dry_run: bool = False):
         if video_id:
             update_video_status(
                 video_id,
-                upload_status="uploaded",
+                publish_status="uploaded",
                 youtube_id=result["youtube_id"],
                 published_at=result["published_at"],
             )
@@ -1606,9 +1881,9 @@ def _handle_upload(final_video: Path, metadata: dict, dry_run: bool = False):
     except Exception as e:
         print(f"  [!] 업로드 실패: {e}")
         if video_id:
-            update_video_status(video_id, upload_status="failed")
+            update_video_status(video_id, publish_status="failed")
         if run_id:
-            update_run(run_id, status="failed", error_message=str(e))
+            update_run(run_id, status="failed", error_message=str(e), failure_stage="publish")
         raise
 
 
@@ -1655,10 +1930,15 @@ def _handle_analyze():
     except Exception as e:
         print(f"[Analytics] 오류: {e}")
         if run_id:
-            update_run(run_id, status="failed", error_message=str(e))
+            update_run(run_id, status="failed", error_message=str(e), failure_stage="collect_analytics")
 
 
-def _enqueue_upload(video_path: Path, metadata: dict):
+def _enqueue_upload(
+    video_path: Path,
+    metadata: dict,
+    trigger_source: str = "manual",
+    publish_after: str | None = None,
+):
     """영상을 업로드 대기열에 저장
 
     Args:
@@ -1678,6 +1958,13 @@ def _enqueue_upload(video_path: Path, metadata: dict):
     dest_video = queue_dir / "video.mp4"
     shutil.copy2(str(video_path), str(dest_video))
 
+    _register_generated_video(
+        metadata=metadata,
+        publish_status="queued",
+        trigger_source=trigger_source,
+        publish_after=publish_after,
+    )
+
     # 메타데이터 저장 (production_plan/research_brief는 크기가 크므로 제외)
     save_meta = {k: v for k, v in metadata.items() if k not in ("production_plan", "research_brief")}
     save_meta["original_video_path"] = str(video_path)
@@ -1690,8 +1977,11 @@ def _enqueue_upload(video_path: Path, metadata: dict):
     print(f"  -> 대기열 저장: {queue_dir.name}")
 
 
-def _process_upload_queue() -> bool:
-    """대기열에서 가장 오래된 영상 1개를 업로드
+def _process_upload_queue(
+    trigger_source: str = "manual",
+    slot_key: str | None = None,
+) -> bool:
+    """대기열에서 업로드 시각이 도달한 영상 1개를 업로드
 
     Returns:
         True: 업로드 성공, False: 대기열이 비었거나 실패
@@ -1710,21 +2000,56 @@ def _process_upload_queue() -> bool:
     if not queue_items:
         return False
 
-    queue_dir = queue_items[0]
-    video_path = queue_dir / "video.mp4"
-    meta_path = queue_dir / "metadata.json"
+    now_utc = datetime.now(timezone.utc)
+    due_items: list[tuple[datetime, Path, dict]] = []
 
-    if not video_path.exists() or not meta_path.exists():
-        print(f"  [!] 대기열 항목 손상, 삭제: {queue_dir.name}")
-        shutil.rmtree(str(queue_dir), ignore_errors=True)
+    for queue_dir in queue_items:
+        video_path = queue_dir / "video.mp4"
+        meta_path = queue_dir / "metadata.json"
+
+        if not video_path.exists() or not meta_path.exists():
+            print(f"  [!] 대기열 항목 손상, 삭제: {queue_dir.name}")
+            shutil.rmtree(str(queue_dir), ignore_errors=True)
+            continue
+
+        try:
+            metadata = json.loads(meta_path.read_text())
+        except Exception:
+            print(f"  [!] 대기열 메타데이터 손상, 삭제: {queue_dir.name}")
+            shutil.rmtree(str(queue_dir), ignore_errors=True)
+            continue
+
+        publish_after_raw = metadata.get("publish_after")
+        publish_after = None
+        if publish_after_raw:
+            try:
+                publish_after = datetime.fromisoformat(str(publish_after_raw).replace("Z", "+00:00"))
+            except ValueError:
+                publish_after = None
+
+        if publish_after and publish_after > now_utc:
+            continue
+
+        sort_key = publish_after or datetime.min.replace(tzinfo=timezone.utc)
+        due_items.append((sort_key, queue_dir, metadata))
+
+    if not due_items:
         return False
 
-    metadata = json.loads(meta_path.read_text())
+    due_items.sort(key=lambda item: (item[0], item[1].name))
+    _, queue_dir, metadata = due_items[0]
+    video_path = queue_dir / "video.mp4"
     part_info = f" (시리즈 {metadata.get('series_part', '?')}/{metadata.get('series_total', '?')}편)" if metadata.get("series_part") else ""
     print(f"\n[대기열] 업로드: {metadata.get('title', '?')}{part_info}")
 
     try:
-        _handle_upload(video_path, metadata)
+        _handle_upload(
+            video_path,
+            metadata,
+            trigger_source=trigger_source if trigger_source != "manual" else "queue",
+            retry_count=1,
+            slot_key=slot_key,
+        )
         # 업로드 성공 시 대기열에서 제거
         shutil.rmtree(str(queue_dir), ignore_errors=True)
         print(f"  -> 대기열에서 제거 완료")
@@ -1762,6 +2087,7 @@ def _run_series_pipeline(
         research_brief=research_brief,
         forced_style_name=style_name if style_name else None,
         forced_bgm_mood=None,
+        winning_patterns=winning_patterns,
     )
     chosen_style_name = str(series_narration_plan.get("style", style_name or "casual")).strip() or "casual"
     series_bgm_mood = str(series_narration_plan.get("bgm_mood", "funny")).strip() or "funny"
@@ -1826,6 +2152,7 @@ def _run_series_pipeline(
         print(f"  -> 시리즈 핵심 인물 풀: {len(series_characters)}명")
 
     results = []
+    series_group_id = str(uuid.uuid4())
     shared_character_sheet_path = None  # 1편 캐릭터 시트를 이후 편에서 재사용
     fixed_series_title = None
     fixed_series_subtitle_base = None
@@ -1856,6 +2183,7 @@ def _run_series_pipeline(
             narration_seed_override=part_seed_map.get(part),
             narration_bgm_mood_override=series_bgm_mood,
         )
+        metadata["series_group_id"] = series_group_id
 
         # 1편에서 생성된 캐릭터 시트를 이후 편에서 재사용
         if part == 1 and metadata.get("character_sheet_path"):
@@ -1876,6 +2204,10 @@ def _run_series_pipeline(
                 print(f"  -> 시리즈 제목 고정: {fixed_series_title}")
             if fixed_series_subtitle_base:
                 print(f"  -> 시리즈 부제 베이스 고정: {fixed_series_subtitle_base}")
+        if fixed_series_title:
+            metadata["series_title"] = fixed_series_title
+        else:
+            metadata["series_title"] = str(metadata.get("title", "")).strip()
 
         # 다음 편을 위한 전편 컨텍스트(장면 텍스트/이미지) 공유
         prod_plan = metadata.get("production_plan", {}) if isinstance(metadata, dict) else {}
@@ -1920,12 +2252,8 @@ def _handle_auto(topic: str, style_name: str | None, no_critic: bool):
 
     # 1) 대기열 우선 처리
     if _process_upload_queue():
-        # 쿼터 재확인
-        quota = check_daily_quota_remaining()
-        if not quota["can_upload"]:
-            print(f"[Auto] 대기열 업로드 후 쿼터 소진. 새 영상 생성 건너뜁니다.")
-            return
-        print(f"[Auto] 대기열 처리 완료. 남은 쿼터: {quota['remaining']}")
+        print("[Auto] 이번 슬롯은 대기열 업로드를 우선 처리했으므로 새 영상 생성은 건너뜁니다.")
+        return
 
     # 2) 피드백 로드 시도
     winning_patterns = None
@@ -1943,8 +2271,20 @@ def _handle_auto(topic: str, style_name: str | None, no_critic: bool):
     # 3) 리서치 먼저 실행 (시리즈 판단 필요)
     hint = topic.strip()
     print(f"[0] 리서치 중... (힌트: '{hint}')" if hint else "[0] 리서치 중... (완전 자율 모드)")
-    research_brief = research(hint, trend_hints=trend_hints)
-    research_brief = _normalize_research_brief(research_brief)
+    research_brief = None
+    duplicate_video = None
+    for attempt in range(1, 4):
+        research_brief = research(hint, trend_hints=trend_hints)
+        research_brief = _normalize_research_brief(research_brief)
+        duplicate_video = _find_recent_duplicate_story(research_brief)
+        if not duplicate_video:
+            break
+        print(
+            f"  [중복 회피] 최근 생성 영상과 source fingerprint가 겹칩니다: "
+            f"{duplicate_video.get('title', '?')} (재탐색 {attempt}/3)"
+        )
+    if duplicate_video:
+        print("  [중복 회피] 최근 중복 소스를 피하지 못해 마지막 후보로 진행합니다.")
     print(f"  -> 주제: {research_brief.get('topic', '?')}")
     print(f"  -> 감정: {research_brief.get('emotion', '?')}")
     print(f"  -> 이야기 유형: {research_brief.get('story_type', '?')}")
@@ -1968,14 +2308,15 @@ def _handle_auto(topic: str, style_name: str | None, no_critic: bool):
         if results:
             print(f"\n[업로드] 시리즈 1/{len(results)}편 즉시 업로드")
             try:
-                _handle_upload(results[0][0], results[0][1])
+                _handle_upload(results[0][0], results[0][1], trigger_source="manual")
             except Exception as e:
                 print(f"  [!] 1편 업로드 실패, 대기열로 이동: {e}")
-                _enqueue_upload(results[0][0], results[0][1])
+                _enqueue_upload(results[0][0], results[0][1], trigger_source="manual")
 
             for i, (video, meta) in enumerate(results[1:], 2):
                 print(f"[대기열] 시리즈 {i}/{len(results)}편 대기열 저장")
-                _enqueue_upload(video, meta)
+                publish_after = _next_publish_slot(datetime.now(KST), step=i - 2).astimezone(timezone.utc).isoformat()
+                _enqueue_upload(video, meta, trigger_source="manual", publish_after=publish_after)
     else:
         # 단일 영상 (리서치 결과 재사용)
         final_video, metadata = run_pipeline_single(
@@ -1986,7 +2327,7 @@ def _handle_auto(topic: str, style_name: str | None, no_critic: bool):
             winning_patterns=winning_patterns,
             research_brief_override=research_brief,
         )
-        _handle_upload(final_video, metadata)
+        _handle_upload(final_video, metadata, trigger_source="manual")
 
 
 def _build_winning_patterns(patterns: list[dict]) -> dict:

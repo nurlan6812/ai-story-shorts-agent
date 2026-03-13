@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { LogEntry } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -12,15 +12,41 @@ const levelColors: Record<string, string> = {
   CRITICAL: "text-red-500 font-bold",
 };
 
+const sourceLabels = {
+  main: "MAIN",
+  recovery: "RECOVERY",
+} as const;
+
+const sourceColors = {
+  main: "text-cyan-400",
+  recovery: "text-amber-400",
+} as const;
+
 export function LogViewer({ logs, className }: { logs: LogEntry[]; className?: string }) {
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [stickToBottom, setStickToBottom] = useState(true);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [logs]);
+    const container = containerRef.current;
+    if (!container || !stickToBottom) return;
+    container.scrollTop = container.scrollHeight;
+  }, [logs, stickToBottom]);
+
+  function handleScroll() {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const distanceFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+    setStickToBottom(distanceFromBottom < 24);
+  }
 
   return (
-    <div className={cn("overflow-y-auto rounded-lg bg-[#0a0a0a] border border-border terminal-scrollbar", className || "h-[calc(100vh-16rem)]")}>
+    <div
+      ref={containerRef}
+      onScroll={handleScroll}
+      className={cn("overflow-y-auto rounded-lg bg-[#0a0a0a] border border-border terminal-scrollbar", className || "h-[calc(100vh-16rem)]")}
+    >
       <div className="p-4 text-xs leading-relaxed" style={{ fontFamily: "var(--font-mono), ui-monospace, monospace" }}>
         {logs.length === 0 ? (
           <p className="text-muted-foreground text-center py-8">
@@ -37,6 +63,14 @@ export function LogViewer({ logs, className }: { logs: LogEntry[]; className?: s
               </span>
               <span
                 className={cn(
+                  "shrink-0 w-20",
+                  sourceColors[entry.source] || "text-muted-foreground"
+                )}
+              >
+                {sourceLabels[entry.source] || entry.source}
+              </span>
+              <span
+                className={cn(
                   "shrink-0 w-16",
                   levelColors[entry.level] || "text-muted-foreground"
                 )}
@@ -49,7 +83,6 @@ export function LogViewer({ logs, className }: { logs: LogEntry[]; className?: s
             </div>
           ))
         )}
-        <div ref={bottomRef} />
       </div>
     </div>
   );

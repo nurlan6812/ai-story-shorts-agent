@@ -8,7 +8,14 @@ load_dotenv()
 BASE_DIR = Path(__file__).parent.parent
 ASSETS_DIR = BASE_DIR / "assets"
 EFFECTS_DIR = ASSETS_DIR / "effects"
-BGM_DIR = ASSETS_DIR / "bgm"
+SAFE_BGM_DIR = ASSETS_DIR / "bgm_safe" / "youtube_audio_library"
+FALLBACK_BGM_DIR = ASSETS_DIR / "bgm_safe" / "fma_cc0"
+LEGACY_BGM_DIR = ASSETS_DIR / "bgm"
+BGM_DIR = Path(os.getenv("BGM_DIR", str(LEGACY_BGM_DIR))).expanduser()
+if not BGM_DIR.exists() and SAFE_BGM_DIR.exists():
+    BGM_DIR = SAFE_BGM_DIR
+if not BGM_DIR.exists() and FALLBACK_BGM_DIR.exists():
+    BGM_DIR = FALLBACK_BGM_DIR
 FONTS_DIR = ASSETS_DIR / "fonts"
 STYLES_DIR = BASE_DIR / "styles"
 OUTPUT_DIR = BASE_DIR / "output"
@@ -30,6 +37,7 @@ REDDIT_PASSWORD = os.getenv("REDDIT_PASSWORD")
 YOUTUBE_CLIENT_ID = os.getenv("YOUTUBE_CLIENT_ID")
 YOUTUBE_CLIENT_SECRET = os.getenv("YOUTUBE_CLIENT_SECRET")
 YOUTUBE_TOKEN_PATH = BASE_DIR / ".youtube_token.json"
+YOUTUBE_DEFAULT_PRIVACY = os.getenv("YOUTUBE_DEFAULT_PRIVACY", "public")
 
 # Supabase
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -42,9 +50,9 @@ VIDEO_FPS = 30
 
 # TTS settings (Gemini TTS)
 TTS_VOICE = "Schedar"  # Voice 07
-TTS_SPEED = 1.2  # 나레이션 배속 (유머/썰은 좀 더 자연스러운 속도)
-TTS_MODEL_PRIMARY = os.getenv("TTS_MODEL_PRIMARY", "gemini-2.5-flash-preview-tts")
-TTS_MODEL_FALLBACK = os.getenv("TTS_MODEL_FALLBACK", "gemini-2.5-pro-preview-tts")
+TTS_SPEED = 1.25  # 나레이션 배속 (유머/썰은 좀 더 자연스러운 속도)
+TTS_MODEL_PRIMARY = os.getenv("TTS_MODEL_PRIMARY", "gemini-2.5-pro-preview-tts")
+TTS_MODEL_FALLBACK = os.getenv("TTS_MODEL_FALLBACK", "gemini-2.5-flash-preview-tts")
 
 # TTS voice mapping (speaker profile based)
 TTS_NARRATOR_VOICE = os.getenv("TTS_NARRATOR_VOICE", TTS_VOICE)
@@ -57,9 +65,10 @@ TTS_ELDER_FEMALE_VOICE = os.getenv("TTS_ELDER_FEMALE_VOICE", TTS_FEMALE_VOICE)
 TTS_ENABLE_STYLE_STEERING = os.getenv("TTS_ENABLE_STYLE_STEERING", "true").lower() == "true"
 
 # Scene transition
-SCENE_GAP = 1.0  # 장면 전환 시 무음 갭 (초)
+SCENE_GAP = 1.15  # 장면 전환 시 무음 갭 (초)
 
 # BGM settings
+BGM_ENABLED = os.getenv("BGM_ENABLED", "true").lower() == "true"
 BGM_VOLUME = 0.22
 EFFECT_VOLUME = 0.8
 

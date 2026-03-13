@@ -3,7 +3,12 @@ import { cn } from "@/lib/utils";
 
 const statusConfig: Record<string, { label: string; className: string }> = {
   pending: { label: "대기중", className: "bg-yellow-500/10 text-yellow-400 border-yellow-500/20" },
+  ready: { label: "업로드 대기", className: "bg-yellow-500/10 text-yellow-400 border-yellow-500/20" },
+  queued: { label: "대기열", className: "bg-amber-500/10 text-amber-400 border-amber-500/20" },
+  uploading: { label: "업로드중", className: "bg-blue-500/10 text-blue-400 border-blue-500/20" },
   uploaded: { label: "업로드됨", className: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" },
+  generating: { label: "생성중", className: "bg-blue-500/10 text-blue-400 border-blue-500/20" },
+  generated: { label: "생성완료", className: "bg-sky-500/10 text-sky-400 border-sky-500/20" },
   failed: { label: "실패", className: "bg-red-500/10 text-red-400 border-red-500/20" },
   running: { label: "실행중", className: "bg-blue-500/10 text-blue-400 border-blue-500/20" },
   completed: { label: "완료", className: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" },

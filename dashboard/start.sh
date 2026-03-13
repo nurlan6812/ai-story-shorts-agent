@@ -28,7 +28,7 @@ FASTAPI_PID=$!
 # Next.js 프론트엔드 (포트 3002)
 echo "[Dashboard] Next.js 시작 (port 3002)..."
 cd "$SCRIPT_DIR/web"
-npm run dev -- -p 3002 &
+npm run dev -- --webpack -p 3002 &
 NEXTJS_PID=$!
 
 echo ""

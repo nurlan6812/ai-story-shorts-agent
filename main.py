@@ -15,6 +15,8 @@ from config.settings import (
     UPLOAD_QUEUE_DIR,
     MAX_CRITIC_REVISIONS,
     IMAGE_WORKERS,
+    IMAGE_CRITIC_ENABLED,
+    IMAGE_CRITIC_MAX_REGENERATIONS,
     YOUTUBE_DEFAULT_PRIVACY,
 )
 from agents.researcher import research
@@ -23,6 +25,7 @@ from agents.imager import generate_image_queries
 from agents.narrator import generate_narration_plan, generate_series_narration_plan
 from agents.speech_planner import plan_speech
 from agents.critic import review_production
+from agents.image_critic import review_scene_images
 from src.image_source import source_image
 from src.tts import run_tts
 from src.image_proc import fit_to_shorts_file, create_subtitle_overlay, create_teaser_overlay
@@ -666,25 +669,54 @@ def _build_reference_role_hint(
     reference_scene_indexes: list[int],
     previous_part_scene_indexes: list[int],
     has_character_sheet: bool,
+    has_current_scene_reference: bool = False,
+    critic_selected_scene_indexes: list[int] | None = None,
+    strict_reference_scope: bool = False,
 ) -> str:
     """참조 이미지 역할을 명시하는 힌트 생성"""
     has_prev_part_refs = bool(previous_part_scene_indexes)
     has_current_refs = bool(reference_scene_indexes)
+    critic_selected_set = {
+        int(idx)
+        for idx in (critic_selected_scene_indexes or [])
+        if isinstance(idx, int)
+    }
 
-    if not has_current_refs and not has_prev_part_refs and not has_character_sheet:
+    if (
+        not has_current_refs
+        and not has_prev_part_refs
+        and not has_character_sheet
+        and not has_current_scene_reference
+    ):
         return ""
 
     parts = []
+    if has_current_scene_reference:
+        parts.append("current generated scene (correction target)")
     if has_character_sheet:
         parts.append("character sheet (identity anchor)")
     if has_prev_part_refs:
         prev_refs = ", ".join(str(i + 1) for i in previous_part_scene_indexes)
         parts.append(f"previous-episode scenes #{prev_refs} (cross-episode continuity)")
     if has_current_refs:
-        refs = ", ".join(str(i + 1) for i in reference_scene_indexes)
-        parts.append(f"previous scenes in this episode #{refs} (in-episode continuity)")
+        critic_selected_refs = [idx for idx in reference_scene_indexes if idx in critic_selected_set]
+        regular_refs = [idx for idx in reference_scene_indexes if idx not in critic_selected_set]
+        if critic_selected_refs:
+            refs = ", ".join(str(i + 1) for i in critic_selected_refs)
+            parts.append(f"critic-selected same-episode anchor scenes #{refs} (in-episode continuity)")
+        if regular_refs:
+            refs = ", ".join(str(i + 1) for i in regular_refs)
+            parts.append(f"same-episode anchor scenes #{refs} (in-episode continuity)")
 
     order_desc = "; ".join(parts)
+    if strict_reference_scope:
+        return (
+            f" Reference image order: {order_desc}. "
+            "Use only these references for identity and continuity. "
+            "Do not infer continuity from unseen scenes. "
+            "Generate a new corrected current-scene moment."
+        )
+
     return (
         f" Reference image order: {order_desc}. "
         "Use anchors for identity/continuity only and generate a new current-scene moment."
@@ -740,6 +772,196 @@ def _collect_scene_image_map(raw_images_dir: Path) -> dict[int, Path]:
         idx = int(m.group(1))
         image_map[idx] = p
     return image_map
+
+
+def _build_image_artifact_guard_hint(scene: dict) -> str:
+    """흔한 이미지 생성 artifact를 줄이기 위한 공통 가드 문구."""
+    instructions = [
+        "Keep anatomy physically plausible and clean.",
+        "Do not generate extra fingers, extra hands, extra arms, extra faces, extra eyes, extra mouths, duplicated bodies, or merged body parts.",
+    ]
+
+    return " " + " ".join(instructions)
+
+
+def _build_image_critic_hint(scene_review: dict | None) -> str:
+    """이미지 critic 피드백을 이미지 재생성 프롬프트에 주입."""
+    if not isinstance(scene_review, dict):
+        return ""
+
+    issue_types = [
+        str(value).strip()
+        for value in scene_review.get("issue_types", [])
+        if str(value).strip()
+    ]
+    raw_focus_texts = scene_review.get("focus_texts", [])
+    focus_texts: list[tuple[str, str]] = []
+    if isinstance(raw_focus_texts, list):
+        for entry in raw_focus_texts:
+            target = ""
+            text = ""
+            if isinstance(entry, dict):
+                target = str(entry.get("target", "")).strip()
+                text = str(entry.get("text", "")).strip()
+            else:
+                text = str(entry).strip()
+            if text:
+                focus_texts.append((target, text))
+    fix_prompt = str(scene_review.get("fix_prompt", "")).strip()
+    reason = str(scene_review.get("reason", "")).strip()
+    continuity_prompt = str(scene_review.get("continuity_prompt", "")).strip()
+
+    instructions = []
+    if issue_types:
+        instructions.append(f"Priority fixes: {', '.join(issue_types)}.")
+    if fix_prompt:
+        instructions.append(f"Correction goal: {fix_prompt}.")
+    elif reason:
+        instructions.append(f"Correction goal: {reason}.")
+    for target, text in focus_texts:
+        if target:
+            instructions.append(f'For {target}, exact readable Korean text that must appear: "{text}".')
+        else:
+            instructions.append(f'Exact readable Korean text that must appear: "{text}".')
+    if continuity_prompt:
+        instructions.append(f"Continuity target: {continuity_prompt}.")
+
+    if not instructions:
+        return ""
+
+    instructions.append(
+        "Preserve the same story beat, character identity, role relationships, key props, and location type."
+    )
+    instructions.append(
+        "You may improve framing, camera distance, composition, lighting, background detail, and non-essential wardrobe details if that makes the key story information clearer."
+    )
+    instructions.append("Do not introduce unrelated new objects, characters, or misleading text.")
+    return " Image critic correction instructions: " + " ".join(instructions)
+
+
+def _build_scene_image_request(
+    scene_index: int,
+    scene: dict,
+    style: dict | None = None,
+    styled_queries: bool = False,
+    character_sheet_image: "Image.Image | None" = None,
+    characters: list[dict] | None = None,
+    generated_image_paths: list[Path | None] | None = None,
+    reference_scene_map: dict[int, list[int]] | None = None,
+    reference_scene_notes_map: dict[int, dict[int, str]] | None = None,
+    previous_part_reference_map: dict[int, list[int]] | None = None,
+    previous_part_reference_notes_map: dict[int, dict[int, str]] | None = None,
+    previous_part_image_map: dict[int, Path] | None = None,
+    current_scene_reference_path: Path | None = None,
+    image_critic_review: dict | None = None,
+    max_reference_images: int = 3,
+) -> tuple[str, list["Image.Image"] | None, list["Image.Image"]]:
+    """장면 이미지 생성/재생성용 최종 프롬프트와 참조 이미지를 조립."""
+    query = scene.get("image_query") or scene.get("scene_outline", "")
+    if styled_queries and style:
+        query = _build_image_query(query, style)
+    scene_cast = scene.get("cast", [])
+    query = query + _build_character_profile_hint(characters, cast=scene_cast)
+    query = query + _build_scene_continuity_hint(scene)
+    query = query + _build_image_artifact_guard_hint(scene)
+
+    is_critic_regen = current_scene_reference_path is not None and isinstance(image_critic_review, dict)
+    selected_refs: list[int] = []
+    if not is_critic_regen and reference_scene_map and scene_index in reference_scene_map:
+        selected_refs = [
+            ref_idx
+            for ref_idx in reference_scene_map.get(scene_index, [])
+            if isinstance(ref_idx, int) and ref_idx < scene_index
+        ]
+
+    critic_reference_scene_indexes: list[int] = []
+    if isinstance(image_critic_review, dict):
+        raw_indexes = image_critic_review.get("reference_scene_indexes", [])
+        if isinstance(raw_indexes, list):
+            for value in raw_indexes:
+                try:
+                    ref_idx = int(value)
+                except Exception:
+                    continue
+                if ref_idx == scene_index or ref_idx < 0:
+                    continue
+                if generated_image_paths and ref_idx >= len(generated_image_paths):
+                    continue
+                if ref_idx not in critic_reference_scene_indexes:
+                    critic_reference_scene_indexes.append(ref_idx)
+    if is_critic_regen:
+        selected_refs = list(critic_reference_scene_indexes)
+    elif critic_reference_scene_indexes:
+        merged_refs: list[int] = []
+        for ref_idx in critic_reference_scene_indexes + selected_refs:
+            if ref_idx not in merged_refs:
+                merged_refs.append(ref_idx)
+        selected_refs = merged_refs
+
+    selected_prev_part_refs: list[int] = []
+    if not is_critic_regen and previous_part_reference_map and scene_index in previous_part_reference_map:
+        selected_prev_part_refs = [
+            ref_idx
+            for ref_idx in previous_part_reference_map.get(scene_index, [])
+            if isinstance(ref_idx, int) and previous_part_image_map and ref_idx in previous_part_image_map
+        ]
+
+    query = query + _build_reference_role_hint(
+        reference_scene_indexes=selected_refs,
+        previous_part_scene_indexes=selected_prev_part_refs,
+        has_character_sheet=character_sheet_image is not None,
+        has_current_scene_reference=current_scene_reference_path is not None,
+        critic_selected_scene_indexes=critic_reference_scene_indexes,
+        strict_reference_scope=is_critic_regen,
+    )
+    notes_for_scene = reference_scene_notes_map.get(scene_index, {}) if reference_scene_notes_map else {}
+    query = query + _build_reference_notes_hint(
+        reference_scene_indexes=selected_refs,
+        reference_notes=notes_for_scene,
+    )
+    prev_notes_for_scene = (
+        previous_part_reference_notes_map.get(scene_index, {})
+        if previous_part_reference_notes_map else {}
+    )
+    query = query + _build_previous_part_notes_hint(
+        reference_scene_indexes=selected_prev_part_refs,
+        reference_notes=prev_notes_for_scene,
+    )
+    query = query + _build_image_critic_hint(image_critic_review)
+
+    refs: list["Image.Image"] = []
+    opened_refs: list["Image.Image"] = []
+
+    def _append_opened_image(path: Path | None) -> None:
+        if path is None or not path.exists():
+            return
+        if len(refs) >= max_reference_images:
+            return
+        try:
+            img = Image.open(path).convert("RGB")
+            refs.append(img)
+            opened_refs.append(img)
+        except Exception:
+            return
+
+    _append_opened_image(current_scene_reference_path)
+
+    if character_sheet_image is not None and len(refs) < max_reference_images:
+        refs.append(character_sheet_image)
+
+    for ref_idx in selected_prev_part_refs:
+        if len(refs) >= max_reference_images:
+            break
+        if previous_part_image_map and ref_idx in previous_part_image_map:
+            _append_opened_image(previous_part_image_map[ref_idx])
+
+    for ref_idx in selected_refs:
+        if len(refs) >= max_reference_images:
+            break
+        if generated_image_paths and ref_idx < len(generated_image_paths):
+            _append_opened_image(generated_image_paths[ref_idx])
+
+    return query, refs if refs else None, opened_refs
 
 
 # ============================================================
@@ -890,80 +1112,34 @@ def _source_scene_images(
     max_reference_images = 3
 
     def _fetch(i: int, scene: dict) -> tuple[int, Path | None]:
-        query = scene.get("image_query") or scene.get("scene_outline", "")
-        if styled_queries and style:
-            query = _build_image_query(query, style)
-        scene_cast = scene.get("cast", [])
-        # 캐릭터 식별(누가 누구인지) 강화를 위해 cast 기반 프로필 힌트는 항상 부착
-        query = query + _build_character_profile_hint(characters, cast=scene_cast)
-        query = query + _build_scene_continuity_hint(scene)
-
-        # in-episode 참조는 LLM 선택 결과만 사용
-        selected_refs: list[int] = []
-        if i >= 1 and reference_scene_map and i in reference_scene_map:
-            selected_refs = [r for r in reference_scene_map.get(i, []) if isinstance(r, int) and r < i]
-
-        selected_prev_part_refs: list[int] = []
-        if previous_part_reference_map and i in previous_part_reference_map:
-            selected_prev_part_refs = [
-                r for r in previous_part_reference_map.get(i, [])
-                if isinstance(r, int) and previous_part_image_map and r in previous_part_image_map
-            ]
-
-        query = query + _build_reference_role_hint(
-            reference_scene_indexes=selected_refs,
-            previous_part_scene_indexes=selected_prev_part_refs,
-            has_character_sheet=character_sheet_image is not None,
+        query, refs, opened_refs = _build_scene_image_request(
+            scene_index=i,
+            scene=scene,
+            style=style,
+            styled_queries=styled_queries,
+            character_sheet_image=character_sheet_image,
+            characters=characters,
+            generated_image_paths=results,
+            reference_scene_map=reference_scene_map,
+            reference_scene_notes_map=reference_scene_notes_map,
+            previous_part_reference_map=previous_part_reference_map,
+            previous_part_reference_notes_map=previous_part_reference_notes_map,
+            previous_part_image_map=previous_part_image_map,
+            max_reference_images=max_reference_images,
         )
-        notes_for_scene = reference_scene_notes_map.get(i, {}) if reference_scene_notes_map else {}
-        query = query + _build_reference_notes_hint(
-            reference_scene_indexes=selected_refs,
-            reference_notes=notes_for_scene,
-        )
-        prev_notes_for_scene = (
-            previous_part_reference_notes_map.get(i, {})
-            if previous_part_reference_notes_map else {}
-        )
-        query = query + _build_previous_part_notes_hint(
-            reference_scene_indexes=selected_prev_part_refs,
-            reference_notes=prev_notes_for_scene,
-        )
-
-        refs = []
-        opened_refs = []
-        if character_sheet_image is not None:
-            refs.append(character_sheet_image)
-        for ref_idx in selected_prev_part_refs:
-            if len(refs) >= max_reference_images:
-                break
-            try:
-                if previous_part_image_map and ref_idx in previous_part_image_map:
-                    prev_img = Image.open(previous_part_image_map[ref_idx])
-                    refs.append(prev_img)
-                    opened_refs.append(prev_img)
-            except Exception:
-                pass
-        for ref_idx in selected_refs:
-            if len(refs) >= max_reference_images:
-                break
-            if ref_idx < len(results) and results[ref_idx]:
+        try:
+            img_path = source_image(
+                query,
+                raw_images_dir / f"scene_{i:02d}.jpg",
+                style=style,
+                reference_images=refs,
+            )
+        finally:
+            for im in opened_refs:
                 try:
-                    in_episode_img = Image.open(results[ref_idx])
-                    refs.append(in_episode_img)
-                    opened_refs.append(in_episode_img)
+                    im.close()
                 except Exception:
                     pass
-        img_path = source_image(
-            query,
-            raw_images_dir / f"scene_{i:02d}.jpg",
-            style=style,
-            reference_images=refs if refs else None,
-        )
-        for im in opened_refs:
-            try:
-                im.close()
-            except Exception:
-                pass
         return i, img_path
 
     # 이전 장면 참조를 사용하면 순차 생성으로 연속성 보장
@@ -994,6 +1170,139 @@ def _source_scene_images(
             results[i] = results[i - 1] if i > 0 and results[i - 1] else None
 
     return results
+
+
+def _apply_image_critic_to_scene_images(
+    scenes: list[dict],
+    raw_images: list[Path | None],
+    work_dir: Path,
+    research_brief: dict | None = None,
+    style: dict | None = None,
+    styled_queries: bool = False,
+    character_sheet_image: "Image.Image | None" = None,
+    characters: list[dict] | None = None,
+    reference_scene_map: dict[int, list[int]] | None = None,
+    reference_scene_notes_map: dict[int, dict[int, str]] | None = None,
+    previous_part_reference_map: dict[int, list[int]] | None = None,
+    previous_part_reference_notes_map: dict[int, dict[int, str]] | None = None,
+    previous_part_image_map: dict[int, Path] | None = None,
+) -> list[Path | None]:
+    """전체 장면을 한 번에 검수하고 문제 장면만 선택적으로 재생성."""
+    if not IMAGE_CRITIC_ENABLED or not scenes or not raw_images:
+        return raw_images
+
+    if any(path is None or not path.exists() for path in raw_images):
+        print("  [Image Critic] 입력 이미지가 불완전해 이번 패스는 건너뜁니다.")
+        return raw_images
+
+    print("  [Image Critic] 장면 정합성 점검 중...")
+    try:
+        review = review_scene_images(
+            scenes=scenes,
+            image_paths=raw_images,
+            research_brief=research_brief,
+        )
+    except Exception as exc:
+        print(f"  ⚠️ Image Critic 실패, 원본 이미지를 유지합니다: {exc}")
+        return raw_images
+
+    review_path = work_dir / "image_critic_review.json"
+    review_path.write_text(json.dumps(review, ensure_ascii=False, indent=2))
+    overall_feedback = str(review.get("overall_feedback", "")).strip()
+    if overall_feedback:
+        print(f"  -> 총평: {overall_feedback}")
+
+    severity_rank = {"high": 0, "medium": 1, "low": 2}
+    candidates = []
+    for item in review.get("scene_reviews", []):
+        if not isinstance(item, dict):
+            continue
+        if not item.get("has_issue") or not item.get("needs_regen"):
+            continue
+        try:
+            scene_index = int(item.get("scene_index"))
+        except Exception:
+            continue
+        candidates.append(item)
+
+    if not candidates:
+        print("  -> 재생성할 장면 없음")
+        return raw_images
+
+    candidates.sort(
+        key=lambda item: (
+            severity_rank.get(str(item.get("severity", "")).lower(), 99),
+            int(item.get("scene_index", 0)),
+        )
+    )
+    selected_reviews = candidates[: max(0, IMAGE_CRITIC_MAX_REGENERATIONS)]
+    if not selected_reviews:
+        print("  -> 재생성 상한이 0이라 원본 유지")
+        return raw_images
+
+    regen_dir = work_dir / "raw_images_critic"
+    updated_images = list(raw_images)
+    applied_reviews: list[dict] = []
+
+    for item in selected_reviews:
+        scene_index = int(item["scene_index"])
+        if scene_index < 0 or scene_index >= len(scenes):
+            continue
+        current_image = updated_images[scene_index]
+        if current_image is None or not current_image.exists():
+            continue
+
+        severity = str(item.get("severity", "low")).upper()
+        reason = str(item.get("reason", "")).strip()
+        print(f"  [Image Critic] 장면 {scene_index + 1} 재생성 ({severity})")
+        if reason:
+            print(f"    -> {reason}")
+
+        query, refs, opened_refs = _build_scene_image_request(
+            scene_index=scene_index,
+            scene=scenes[scene_index],
+            style=style,
+            styled_queries=styled_queries,
+            character_sheet_image=character_sheet_image,
+            characters=characters,
+            generated_image_paths=updated_images,
+            reference_scene_map=reference_scene_map,
+            reference_scene_notes_map=reference_scene_notes_map,
+            previous_part_reference_map=previous_part_reference_map,
+            previous_part_reference_notes_map=previous_part_reference_notes_map,
+            previous_part_image_map=previous_part_image_map,
+            current_scene_reference_path=current_image,
+            image_critic_review=item,
+            max_reference_images=4,
+        )
+        try:
+            regen_path = source_image(
+                query,
+                regen_dir / f"scene_{scene_index:02d}.jpg",
+                style=style,
+                reference_images=refs,
+            )
+        finally:
+            for im in opened_refs:
+                try:
+                    im.close()
+                except Exception:
+                    pass
+
+        if regen_path is None:
+            print(f"    ⚠️ 장면 {scene_index + 1} 재생성 실패, 원본 유지")
+            continue
+
+        updated_images[scene_index] = regen_path
+        applied_reviews.append(item)
+        print(f"    -> 장면 {scene_index + 1} 재생성 완료")
+
+    if applied_reviews:
+        (work_dir / "image_critic_applied.json").write_text(
+            json.dumps(applied_reviews, ensure_ascii=False, indent=2)
+        )
+
+    return updated_images
 
 
 # ============================================================
@@ -1461,6 +1770,21 @@ def run_pipeline_single(
         previous_part_reference_notes_map=previous_part_reference_scene_notes_map,
         previous_part_image_map=previous_part_image_map,
     )
+    raw_images = _apply_image_critic_to_scene_images(
+        scenes=scenes,
+        raw_images=raw_images,
+        work_dir=work_dir,
+        research_brief=research_brief,
+        style=style,
+        styled_queries=True,
+        character_sheet_image=character_sheet_image,
+        characters=characters,
+        reference_scene_map=reference_scene_map,
+        reference_scene_notes_map=reference_scene_notes_map,
+        previous_part_reference_map=previous_part_reference_scene_map,
+        previous_part_reference_notes_map=previous_part_reference_scene_notes_map,
+        previous_part_image_map=previous_part_image_map,
+    )
 
     # 3. 이미지 가공 (배경/오버레이 분리)
     print(f"[3] 이미지 가공 중... (스타일: {style_name})")
@@ -1649,6 +1973,16 @@ def run_pipeline_compare(
     raw_images_dir = work_dir / "raw_images"
     raw_images = _source_scene_images(
         base_scenes, raw_images_dir, style=None, styled_queries=False, characters=characters,
+    )
+    raw_images = _apply_image_critic_to_scene_images(
+        scenes=base_scenes,
+        raw_images=raw_images,
+        work_dir=work_dir,
+        research_brief=research_brief,
+        style=None,
+        styled_queries=False,
+        character_sheet_image=None,
+        characters=characters,
     )
 
     # 3. TTS 생성 (공유)

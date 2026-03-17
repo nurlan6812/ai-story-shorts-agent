@@ -294,8 +294,7 @@ Core requirements:
 - Use natural spoken Korean. Avoid stiff written tone.
 - Keep narration concise. Let each scene breathe naturally when the story needs it.
 - Keep every scene narration to 1~2 Korean sentences, within {MAX_NARRATION_CHARS} Korean characters.
-- If you include direct quoted speech, write it as natural spoken Korean that could actually be said aloud, not dictionary-form or citation-style wording.
-- If a quote is not important as a direct spoken line, prefer paraphrasing it smoothly into narration instead of preserving stiff quoted wording from the source.
+- Even when using colloquial or spoken phrasing, make sure it does not feel awkward within the overall narrator flow.
 - Prefer lightly generalized public wording such as "서울의 한 지하철역", "한 패스트푸드 매장", "회사" instead of exposing exact identifiable real-world place or brand names from the source.
 - Choose narrative person (1인칭/3인칭) that best fits the story and keep it mostly consistent.
 - Keep relationship labels consistent across scenes. Do not confuse girlfriend, fiancee, wife, husband, mother, father, boss, coworker, etc.
@@ -488,8 +487,7 @@ Global rules:
 - Use natural spoken Korean (not stiff written tone).
 - Keep narration concise. Let each scene breathe naturally when the story needs it.
 - Keep every scene narration to 1~2 Korean sentences, within {MAX_NARRATION_CHARS} Korean characters.
-- If you include direct quoted speech, write it as natural spoken Korean that could actually be said aloud, not dictionary-form or citation-style wording.
-- If a quote is not important as a direct spoken line, prefer paraphrasing it smoothly into narration instead of preserving stiff quoted wording from the source.
+- Even when using colloquial or spoken phrasing, make sure it does not feel awkward within the overall narrator flow.
 - Prefer lightly generalized public wording such as "서울의 한 지하철역", "한 패스트푸드 매장", "회사" instead of exposing exact identifiable real-world place or brand names from the source.
 - Keep factual anchors aligned with original_title/original_story.
 - Keep relationship labels consistent across parts and scenes. Do not confuse girlfriend, fiancee, wife, husband, mother, father, boss, coworker, etc.

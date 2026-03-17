@@ -1,5 +1,6 @@
 """이미지 소싱: Gemini 전용 (재시도 로직 포함)"""
 
+import re
 import time
 from pathlib import Path
 from google import genai
@@ -22,6 +23,35 @@ def _get_gemini_client():
             http_options=types.HttpOptions(timeout=IMAGE_REQUEST_TIMEOUT_MS),
         )
     return _gemini_client
+
+
+def _extract_retry_seconds(err: str) -> int | None:
+    m = re.search(r"Please retry in ([^.\n]+(?:\.\d+)?s)", err)
+    if not m:
+        return None
+
+    text = m.group(1)
+    h = re.search(r"(\d+)h", text)
+    mnt = re.search(r"(\d+)m", text)
+    sec = re.search(r"(\d+(?:\.\d+)?)s", text)
+    total = 0.0
+    if h:
+        total += int(h.group(1)) * 3600
+    if mnt:
+        total += int(mnt.group(1)) * 60
+    if sec:
+        total += float(sec.group(1))
+    if total <= 0:
+        return None
+    return int(total)
+
+
+def _compute_retry_wait(attempt: int, err: str = "") -> int:
+    wait = RETRY_DELAY * (2 ** max(0, attempt - 1))
+    hinted = _extract_retry_seconds(err)
+    if hinted:
+        wait = max(wait, hinted)
+    return min(wait, 1800)
 
 
 def generate_gemini_image(
@@ -80,11 +110,24 @@ def generate_gemini_image(
                     part.as_image().save(str(save_path))
                     return save_path
 
+            if attempt < MAX_RETRIES:
+                wait = _compute_retry_wait(attempt, "empty image response")
+                print(
+                    f"    ⚠️ Gemini 이미지 응답에 이미지가 없음 ({attempt}/{MAX_RETRIES})"
+                )
+                print(f"    → {wait}초 후 재시도...")
+                time.sleep(wait)
+            else:
+                print(
+                    f"    ❌ Gemini 이미지 응답에 이미지가 없음 ({MAX_RETRIES}회 시도)"
+                )
+
         except Exception as e:
             if attempt < MAX_RETRIES:
+                wait = _compute_retry_wait(attempt, str(e))
                 print(f"    ⚠️ Gemini 이미지 생성 실패 ({attempt}/{MAX_RETRIES}): {e}")
-                print(f"    → {RETRY_DELAY}초 후 재시도...")
-                time.sleep(RETRY_DELAY)
+                print(f"    → {wait}초 후 재시도...")
+                time.sleep(wait)
             else:
                 print(f"    ❌ Gemini 이미지 생성 최종 실패 ({MAX_RETRIES}회 시도): {e}")
 
@@ -131,11 +174,19 @@ def generate_character_sheet(
                     save_path.parent.mkdir(parents=True, exist_ok=True)
                     part.as_image().save(str(save_path))
                     return save_path
+            if attempt < MAX_RETRIES:
+                wait = _compute_retry_wait(attempt, "empty image response")
+                print(f"    ⚠️ 캐릭터 시트 응답에 이미지가 없음 ({attempt}/{MAX_RETRIES})")
+                print(f"    → {wait}초 후 재시도...")
+                time.sleep(wait)
+            else:
+                print(f"    ❌ 캐릭터 시트 응답에 이미지가 없음 ({MAX_RETRIES}회 시도)")
         except Exception as e:
             if attempt < MAX_RETRIES:
+                wait = _compute_retry_wait(attempt, str(e))
                 print(f"    ⚠️ 캐릭터 시트 생성 실패 ({attempt}/{MAX_RETRIES}): {e}")
-                print(f"    → {RETRY_DELAY}초 후 재시도...")
-                time.sleep(RETRY_DELAY)
+                print(f"    → {wait}초 후 재시도...")
+                time.sleep(wait)
             else:
                 print(f"    ❌ 캐릭터 시트 최종 실패 ({MAX_RETRIES}회 시도): {e}")
 

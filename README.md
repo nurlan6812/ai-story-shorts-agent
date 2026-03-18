@@ -1,57 +1,405 @@
 # youtube_humor
 
-AI 에이전트가 리서치부터 쇼츠 영상 생성, 업로드, 성과 수집까지 처리하는 9:16 YouTube Shorts 파이프라인입니다.
+`youtube_humor`는 한국형 사이다/반전/웃긴 썰을 자동으로 리서치하고, 9:16 쇼츠 영상으로 생성하고, 업로드 후 성과를 다시 분석하는 **멀티 에이전트 YouTube Shorts 자동화 시스템**입니다.
 
-현재 기준 핵심 구조는 아래입니다.
+이 저장소는 단순한 "영상 생성 스크립트"가 아니라 아래를 모두 포함하는 **AI 개발자 포트폴리오용 시스템 프로젝트**입니다.
 
-`Researcher -> Narrator -> Director -> Critic -> Imager -> Speech Planner -> Image/TTS/Compose -> Upload/Analytics`
+- 툴 사용형 리서치 에이전트
+- 서사 설계용 planning agent 조합
+- 이미지 생성 후 품질 검수와 선택적 재생성
+- TTS, 자막/레이아웃, FFmpeg 합성
+- YouTube 업로드 및 애널리틱스 수집
+- 메인/복구 스케줄러와 운영 대시보드
 
-상세 구조 문서:
-- [Architecture](/Users/seogjaegwang/personal/youtube_humor/docs/architecture.md)
-- [Shorts Market Plan 2026](/Users/seogjaegwang/personal/youtube_humor/docs/shorts_market_plan_2026.md)
+## 한눈에 보는 핵심 워크플로우
 
-## 현재 파이프라인
+```text
+Researcher
+  -> Narrator
+  -> Director
+  -> Critic
+  -> Imager
+  -> Speech Planner
+  -> Character Sheet / Reference Selection / Image Generation
+  -> Image Critic / Selective Regeneration
+  -> TTS
+  -> Image Processing
+  -> Video Compose
+  -> Upload
+  -> Analytics / Pattern Feedback
+```
+
+## 프로젝트가 다루는 문제
+
+보통 쇼츠 자동화는 아래 중 하나만 잘하는 경우가 많습니다.
+
+- 주제 수집
+- 대본 생성
+- 이미지 생성
+- 업로드 자동화
+
+이 프로젝트는 이걸 **한 파이프라인으로 묶고**, 실제 운영을 위한 요소까지 포함합니다.
+
+- 같은 인물이 장면마다 유지되도록 캐릭터 시트/레퍼런스 사용
+- 단편과 시리즈를 다른 planning 전략으로 분리
+- 화자 분리와 보이스 매핑
+- 생성 이미지의 텍스트 오류/연속성 오류를 잡는 image critic
+- 업로드 후 조회수/CTR/패턴 분석
+- 실패 슬롯 복구 스케줄러
+- FastAPI + Next.js 기반 운영 대시보드
+
+## 시스템 아키텍처
+
+### 1. 생성 레이어
+
+이 레이어는 실제 콘텐츠를 만듭니다.
+
+- `Researcher`
+  - 웹 검색과 본문 확인을 통해 리서치 브리프 생성
+- `Narrator`
+  - 스타일/BGM/장면 흐름/나레이션 생성
+- `Director`
+  - 제목, 설명, 태그, cast, continuity, shot plan, visual metadata 확장
+- `Critic`
+  - story structure와 scene plan 품질 점검 후 수정 루프 수행
+- `Imager`
+  - 장면 메타를 이미지 모델용 `image_query`로 변환
+- `Speech Planner`
+  - narration을 speech segment로 분리하고 speaker/voice mapping 생성
+- `Image Critic`
+  - 생성된 장면 이미지를 보고 텍스트 불일치, continuity, composition, readability 문제를 찾고 필요한 장면만 재생성
+
+### 2. 렌더 레이어
+
+이 레이어는 planning 결과를 실제 쇼츠 영상으로 바꿉니다.
+
+- 캐릭터 시트 생성
+- 장면별 reference image 선택
+- Gemini 이미지 생성
+- Gemini TTS 음성 생성
+- Pillow 기반 오버레이/배경 처리
+- FFmpeg 기반 클립 연결, 전환, BGM, 효과음, 최종 MP4 렌더
+
+### 3. 운영 레이어
+
+이 레이어는 "한 번 만들어보는 데모"가 아니라, 실제 운영 가능한 자동화 시스템을 만듭니다.
+
+- 메인 스케줄러
+- 복구 스케줄러
+- 업로드 후 YouTube Analytics 수집
+- Supabase 기반 영상/실행/패턴/애널리틱스 저장
+- FastAPI + Next.js 대시보드
+
+## End-to-End 워크플로우 상세
+
+### 1. Researcher
+
+파일: `agents/researcher.py`
+
+역할:
+- Tavily 검색
+- 본문 크롤링
+- 실제 읽을 만한 원문 2개 이상 비교
+- 최근 업로드/중복 주제 회피
+
+출력:
+- `topic`
+- `original_title`
+- `original_story`
+- `story_type`
+- `source_region`
+- `style_suggestion`
+- `series_potential`
+- `emotion`
+
+특징:
+- 단순 키워드 리라이트가 아니라, 검색과 본문 읽기를 반복하는 ReAct형 리서처입니다.
+- 툴 호출은 `search_web`, `crawl_article` 중심으로 구성됩니다.
+
+### 2. Narrator
+
+파일: `agents/narrator.py`
+
+역할:
+- 이야기 밀도에 맞춰 scene 수 결정
+- 스타일/BGM 선택
+- scene seed와 narration 생성
+
+현재 규칙:
+- 장면 수: `6~10`
+- 장면당 나레이션: `1~2문장`, `65자 이내`
+- 자연스러운 구어체 한국어
+- 서사 흐름 안에서 어색하게 튀지 않는 구어체 사용
+
+단편:
+- 하나의 standalone episode를 만듭니다.
+
+시리즈:
+- `2~3` 파트 구조를 한 번에 설계합니다.
+- `characters`, `parts`, `cliffhanger`까지 생성합니다.
+
+### 3. Director
+
+파일: `agents/director.py`
+
+역할:
+- Narrator seed를 production plan으로 확장
+- 시각화에 필요한 메타를 구체화
+
+생성 항목 예시:
+- `title`
+- `subtitle`
+- `description`
+- `summary`
+- `tags`
+- `characters`
+- 장면별 `cast`
+- `continuity_state`
+- `shot_plan`
+- `world_context`
+- `camera`
+- `transition`
+
+### 4. Critic
+
+파일: `agents/critic.py`
+
+역할:
+- Director 결과를 검토
+- 구조, 감정선, payoff, visual alignment를 점검
+- 필요하면 Director revise 루프 수행
+
+즉 이 단계는 "이미지"를 보는 critic이 아니라, **스토리/플랜 critic**입니다.
+
+### 5. Imager
+
+파일: `agents/imager.py`
+
+역할:
+- scene metadata를 기반으로 `image_query` 생성
+
+입력으로 주로 보는 것:
+- `scene_outline`
+- `narration`
+- `image_intent`
+- `setting_hint`
+- `cast`
+- `continuity_state`
+- `shot_plan`
+- `world_context`
+
+### 6. Speech Planner
+
+파일: `agents/speech_planner.py`
+
+역할:
+- narration을 speech segment 단위로 분해
+- `narration`과 `dialogue`를 구분
+- speaker별 voice assignment 생성
+
+출력:
+- scene별 `segments`
+- 전체 `voice_map`
+
+특징:
+- narration 자체를 다시 쓰는 게 아니라
+- 어떤 문장을 누가 어떤 톤으로 읽을지 분해하는 단계입니다.
+
+### 7. Character Sheet / Reference Selection / Image Generation
+
+관련 파일:
+- `main.py`
+- `tools/scene_reference_selector.py`
+- `src/image_source.py`
+
+흐름:
+1. 캐릭터 시트 생성
+2. 이전 장면/전편 장면 중 필요한 레퍼런스 선택
+3. `main.py`가 최종 프롬프트를 조립
+4. Gemini 이미지 모델로 9:16 장면 생성
+
+최종 이미지 프롬프트에 포함되는 것:
+- 스타일 prefix / suffix
+- `image_query`
+- 캐릭터 identity 힌트
+- continuity 힌트
+- reference role 설명
+- anatomy guard
+
+### 8. Image Critic / Selective Regeneration
+
+파일:
+- `agents/image_critic.py`
+- `main.py`
+
+이 프로젝트의 현재 핵심 차별점 중 하나입니다.
+
+역할:
+- 생성된 장면 이미지 전체를 한 번에 검수
+- narration/scene metadata와 실제 이미지 정합성 체크
+- 문제 장면만 선택적으로 재생성
+
+대표적으로 잡는 문제:
+- note / sign / screen 텍스트 불일치
+- character continuity 깨짐
+- location type mismatch
+- composition/readability 문제
+- anatomy artifact
+
+재생성 전략:
+- 전체를 다시 그리지 않음
+- 문제 장면만 재생성
+- 현재 깨진 이미지 + character sheet + critic이 고른 same-episode anchor만 ref로 사용
+- 원본보다 나아진 장면만 최종 파이프라인에 반영
+
+이 구조는 단순 생성보다 한 단계 더 나아간 **multimodal evaluation + correction loop** 입니다.
+
+### 9. TTS
+
+파일: `src/tts.py`
+
+역할:
+- Gemini TTS로 장면별 음성 생성
+- narrator/character voice 분기
+- 스타일 힌트 반영
+- 모델 폴백 및 재시도
+
+현재 특징:
+- narrator는 고정된 storyteller 톤을 유지하도록 설계
+- 장면별 화자 voice_map 기반으로 음성 선택
+- 재시도 및 모델 폴백 내장
+
+### 10. Image Processing / Compose
+
+관련 파일:
+- `src/image_proc.py`
+- `tools/video_composer.py`
+- `src/video.py`
+- `src/effects.py`
+
+역할:
+- 배경/오버레이 이미지 생성
+- 자막/레이아웃 렌더
+- 장면별 motion 적용
+- 효과음, 전환, BGM 연결
+- 최종 MP4 생성
+
+### 11. Upload / Analytics / Feedback
+
+관련 파일:
+- `main.py`
+- `tools/youtube_uploader.py`
+- `tools/youtube_analytics.py`
+- `agents/analyzer.py`
+
+역할:
+- YouTube 업로드
+- `videos`, `runs`, `analytics`, `patterns` 저장
+- 업로드 후 성과 수집
+- pattern feedback 생성
+- 다음 리서치/생성에 반영
+
+즉 이 프로젝트는 `생성 -> 업로드`로 끝나지 않고, **성과 피드백이 다음 생성에 다시 들어가는 closed loop** 입니다.
+
+## 단편 / 시리즈 / 비교 모드
 
 ### 단편
-1. `Researcher`
-   - 웹 검색 + 본문 확인
-   - `research_brief.json` 생성
-2. `Narrator`
-   - 스타일/BGM/장면 흐름/나레이션 생성
-3. `Director`
-   - 단편용 characters + scene metadata 생성
-4. `Critic`
-   - 점검 후 필요 시 `Director` 수정
-5. `Imager`
-   - scene별 `image_query` 생성
-6. `Speech Planner`
-   - narration/dialogue 분리 + 화자/보이스 매핑
-7. `Image / Character Sheet / Ref selection`
-   - 캐릭터 시트 생성
-   - 장면 참조 선택
-   - 이미지 생성
-8. `TTS / Process / Compose`
-   - 장면별 음성 생성
-   - 오버레이/자막 렌더
-   - 최종 영상 합성
+
+기본 모드입니다.
+
+```text
+Researcher -> Single Narrator -> Single Director -> Critic -> ...
+```
 
 ### 시리즈
-1. `Researcher`
-   - `series_potential`만 판단
-2. `Series Narrator`
-   - 전편 구조를 한 번에 생성
-   - `parts`, `cliffhanger`, `series_characters` 생성
-3. `Series Director`
-   - 현재 편 scene meta만 정리
-   - `series_characters`를 유지하고 `cast/continuity/shot_plan` 중심으로 설계
-4. 이후 단계는 단편과 동일
-5. 비최종편은 마지막 teaser card `N편에서 공개`를 자동 추가
+
+시리즈는 planning 전략이 다릅니다.
+
+```text
+Researcher
+  -> Series Narrator
+  -> Series Director (편별)
+  -> 이후 단편과 동일
+```
+
+특징:
+- `Series Narrator`가 전체 파트 구조를 한 번에 설계
+- 공통 `characters`를 먼저 고정
+- 후속편은 이전 편 장면과 voice map을 재사용
 
 ### 비교 모드
-- `Narrator/Director/Image/TTS` 공유 결과를 만든 뒤
-- 스타일별 motion/layout만 달리 적용해 여러 개의 비교 영상을 렌더합니다.
 
-## 핵심 디렉토리
+같은 planning 결과를 바탕으로 motion/layout만 바꿔 여러 버전을 렌더합니다.
+
+포트폴리오 관점에서는 **creative A/B testing pipeline** 으로 볼 수 있습니다.
+
+## 운영 자동화 구조
+
+### 메인 스케줄러
+
+파일: `scheduler.py`
+
+역할:
+- 정규 슬롯 생성/업로드
+- 헬스 체크
+- 애널리틱스 수집
+- 패턴 분석
+
+### 복구 스케줄러
+
+파일: `scheduler_2.py`
+
+역할:
+- 최근 슬롯에 누락된 업로드 결과가 있는지 점검
+- 필요하면 `scheduler_jobs.py`를 통해 해당 슬롯 재실행
+
+### 공통 작업 로직
+
+파일: `scheduler_jobs.py`
+
+역할:
+- slot lock
+- 중복 실행 방지
+- `job_generate_and_upload`
+- 누락 슬롯 복구
+
+즉 이 프로젝트는 "AI 영상 생성기"를 넘어 **운영 가능한 autonomous content pipeline** 형태를 갖고 있습니다.
+
+## 운영 대시보드
+
+디렉토리: `dashboard/`
+
+구성:
+- `dashboard/api`: FastAPI
+- `dashboard/web`: Next.js
+
+할 수 있는 것:
+- 메인/복구 스케줄러 상태 확인
+- 시작/정지
+- 최신 실행 기록 조회
+- 영상 목록/상세 조회
+- 성과 지표/패턴 보기
+- 시스템 로그 확인
+
+## 기술 스택
+
+| 영역 | 스택 |
+|---|---|
+| LLM / planning | Gemini |
+| Search | Tavily |
+| Crawling / parsing | custom fetchers + content extraction |
+| Image generation | Gemini image generation path |
+| Image evaluation | custom image critic + selective regeneration |
+| TTS | Gemini TTS |
+| Image processing | Pillow |
+| Final rendering | FFmpeg |
+| Storage / metadata | Supabase |
+| Upload / analytics | YouTube Data API, YouTube Analytics API |
+| Scheduling | APScheduler |
+| Dashboard backend | FastAPI |
+| Dashboard frontend | Next.js |
+
+## 저장소 구조
 
 ```text
 youtube_humor/
@@ -67,82 +415,49 @@ youtube_humor/
 ├── assets/
 ├── dashboard/
 ├── docs/
+├── supabase/
 └── output/
 ```
 
-### `agents/`
-- [researcher.py](/Users/seogjaegwang/personal/youtube_humor/agents/researcher.py)
-  - 웹 검색 + 본문 확인 기반 리서치 브리프 생성
-- [narrator.py](/Users/seogjaegwang/personal/youtube_humor/agents/narrator.py)
-  - 단편/시리즈 narrator
-  - 스타일/BGM/scene seed/시리즈 구조 생성
-- [director.py](/Users/seogjaegwang/personal/youtube_humor/agents/director.py)
-  - 단편/시리즈 director
-  - scene metadata, continuity, title/subtitle, character layout
-- [critic.py](/Users/seogjaegwang/personal/youtube_humor/agents/critic.py)
-  - 플랜 품질 검증 및 수정 루프
-- [imager.py](/Users/seogjaegwang/personal/youtube_humor/agents/imager.py)
-  - scene metadata -> `image_query`
-- [speech_planner.py](/Users/seogjaegwang/personal/youtube_humor/agents/speech_planner.py)
-  - 장면별 narration/dialogue segment + 화자 매핑
-- [analyzer.py](/Users/seogjaegwang/personal/youtube_humor/agents/analyzer.py)
-  - 업로드 후 성과 분석/패턴 추출
+### 핵심 디렉토리 설명
 
-### `tools/`
-- [content_fetcher.py](/Users/seogjaegwang/personal/youtube_humor/tools/content_fetcher.py)
-  - 본문 추출/크롤링 보조
-- [web_search.py](/Users/seogjaegwang/personal/youtube_humor/tools/web_search.py)
-  - Tavily 검색
-- [scene_reference_selector.py](/Users/seogjaegwang/personal/youtube_humor/tools/scene_reference_selector.py)
-  - 이전 장면/전편 장면 참조 선택
-- [style_manager.py](/Users/seogjaegwang/personal/youtube_humor/tools/style_manager.py)
-  - 스타일 JSON 로더
-- [video_composer.py](/Users/seogjaegwang/personal/youtube_humor/tools/video_composer.py)
-  - FFmpeg 기반 합성
-- [youtube_uploader.py](/Users/seogjaegwang/personal/youtube_humor/tools/youtube_uploader.py)
-  - 업로드 및 쿼터 관리
-- [youtube_analytics.py](/Users/seogjaegwang/personal/youtube_humor/tools/youtube_analytics.py)
-  - 업로드 후 성과 수집
-- [supabase_client.py](/Users/seogjaegwang/personal/youtube_humor/tools/supabase_client.py)
-  - DB 저장/조회
+- `agents/`
+  - LLM 기반 planning / evaluation 계층
+- `tools/`
+  - 검색, 업로드, 분석, reference selection, style loading 등 서비스 유틸
+- `src/`
+  - 이미지 소싱, TTS, 렌더링 등 실행 계층
+- `config/`
+  - 모델, TTS, scene gap, critic 옵션 등 설정
+- `styles/`
+  - motion/layout/BGM/style preset
+- `dashboard/`
+  - 운영 대시보드
+- `output/`
+  - 1회 실행 결과물 저장
 
-### `src/`
-- [image_source.py](/Users/seogjaegwang/personal/youtube_humor/src/image_source.py)
-  - 실제 이미지 생성/소싱
-- [image_proc.py](/Users/seogjaegwang/personal/youtube_humor/src/image_proc.py)
-  - 제목/부제/자막 오버레이 렌더
-- [tts.py](/Users/seogjaegwang/personal/youtube_humor/src/tts.py)
-  - 장면별 TTS 생성
-- [video.py](/Users/seogjaegwang/personal/youtube_humor/src/video.py)
-  - BGM 선택 유틸
-- [effects.py](/Users/seogjaegwang/personal/youtube_humor/src/effects.py)
-  - 효과음 매핑
-
-## 현재 실행 방식
+## 실행 예시
 
 ```bash
 # 기본: 리서처가 주제 자동 선정
 python main.py
 
-# 힌트 제공
+# 주제 힌트 제공
 python main.py "불륜 복수 썰"
 
 # 스타일 강제
 python main.py --style storytelling
 
-# Critic 생략
-python main.py --no-critic
-
-# YouTube 업로드
+# 업로드 포함
 python main.py --upload
 
-# 업로드 없이 메타데이터만 확인
+# 업로드 없이 확인
 python main.py --upload --dry-run
 
-# 성과 패턴 반영
+# 피드백 반영
 python main.py --with-feedback
 
-# 여러 스타일 비교
+# 비교 렌더
 python main.py --compare
 
 # 자동 모드
@@ -151,10 +466,7 @@ python main.py --auto
 # 애널리틱스 수집
 python main.py --analyze
 
-# 스타일 목록
-python main.py --list-styles
-
-# YouTube OAuth
+# OAuth 인증
 python main.py --auth
 ```
 
@@ -167,12 +479,12 @@ python scheduler_2.py
 python scheduler_2.py --once
 ```
 
-## 출력 구조
+## 실행 결과물 구조
 
 기본 출력 경로:
-- [output](/Users/seogjaegwang/personal/youtube_humor/output)
+- `output/YYYYMMDD_HHMMSS[_partN]/`
 
-실행 1회당 대략 아래 파일이 생깁니다.
+대표 산출물:
 
 ```text
 output/YYYYMMDD_HHMMSS[_partN]/
@@ -180,9 +492,12 @@ output/YYYYMMDD_HHMMSS[_partN]/
 ├── production_plan.json
 ├── script.json
 ├── reference_scene_map.json
-├── previous_part_reference_map.json        # 시리즈 후속편일 때만
-├── character_sheet.png                     # 생성되면
+├── previous_part_reference_map.json   # 시리즈 후속편일 때만
+├── character_sheet.png
+├── image_critic_review.json
+├── image_critic_applied.json
 ├── raw_images/
+├── raw_images_critic/
 ├── processed/
 │   ├── bg/
 │   └── overlay/
@@ -191,29 +506,37 @@ output/YYYYMMDD_HHMMSS[_partN]/
 └── [title].mp4
 ```
 
-## 현재 코드 기준 특징
+이 구조 덕분에 한 번의 실행이:
+- 어떤 리서치에서 시작됐는지
+- 어떤 장면 계획이 나왔는지
+- 어떤 이미지가 critic에서 교체됐는지
+- 최종 영상이 무엇인지
 
-- `script_gen` 구형 폴백 경로는 제거됨
-- 시리즈는 `Narrator`가 전체 구조를 먼저 짜고 `Director`는 편별 scene meta를 정리함
-- `Speech Planner`는 narration을 그대로 두고 segment/speaker만 나눔
-- 이미지 프롬프트는 `Imager`가 `image_query`를 만들고, `main.py`가 최종 wrapper를 붙여 실제 이미지 모델로 보냄
-- public-facing narration/scene text는 필요 시 정확한 상호/역명/학교명/회사명을 일반화하도록 조정되어 있음
-- 자동화는 `scheduler.py`(메인 슬롯) + `scheduler_2.py`(누락 슬롯 복구)로 분리되어 있음
-- 대시보드에서 메인/복구 스케줄러를 각각 제어하고 최근 복구 활동을 확인할 수 있음
+를 나중에 재현 가능하게 남깁니다.
 
-## 기술 스택
+## 이 프로젝트에서 보여주고 싶은 엔지니어링 포인트
 
-- Text / planning: Gemini
-- Image generation: Gemini image path via local pipeline
-- TTS: Gemini TTS
-- Search: Tavily
-- Rendering: Pillow + FFmpeg
-- Scheduling: APScheduler
-- Upload/analytics: YouTube Data API / Analytics API
-- Storage/metadata: Supabase
-- Dashboard: FastAPI + Next.js
+포트폴리오 관점에서 이 저장소가 보여주는 건 아래입니다.
 
-## 참고
+- **멀티 에이전트 오케스트레이션**
+  - research / narration / directing / evaluation / speech planning
+- **툴 사용형 리서치 자동화**
+  - 검색 + 본문 확인 + 필터링
+- **멀티모달 생성 파이프라인**
+  - text -> plan -> image -> speech -> video
+- **LLM 결과물 검수 루프**
+  - plan critic
+  - image critic
+- **선택적 재생성 전략**
+  - 전체 재생성이 아니라 문제 장면만 수정
+- **운영 자동화**
+  - main scheduler + recovery scheduler + dashboard
+- **closed-loop optimization**
+  - 업로드 후 analytics/patterns가 다음 생성에 다시 반영
 
-- 현재 README는 “빠른 시작 + 현재 구조 요약” 중심입니다.
-- 세부 데이터 흐름, 단편/시리즈 분기, 산출물 의미, 유지보수 포인트는 [Architecture](/Users/seogjaegwang/personal/youtube_humor/docs/architecture.md)에 정리했습니다.
+## 참고 문서
+
+- `docs/architecture.md`
+- `docs/shorts_market_plan_2026.md`
+
+이 README는 포트폴리오용 개요 중심입니다. 더 세부적인 구현 메모는 `docs/` 아래 문서로 확장할 수 있습니다.

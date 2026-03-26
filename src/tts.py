@@ -6,21 +6,22 @@ import wave
 import re
 from pathlib import Path
 from typing import Any
-from google import genai
 from google.genai import types
 from config.settings import (
-    GEMINI_API_KEY,
     TTS_SPEED,
     TTS_NARRATOR_VOICE,
+    TTS_NARRATOR_TRAILING_SPACES,
     TTS_ENABLE_STYLE_STEERING,
+    TTS_LANGUAGE_CODE,
     TTS_MODEL_PRIMARY,
     TTS_MODEL_FALLBACK,
 )
+from src.genai_client import create_genai_client
 
-client = genai.Client(api_key=GEMINI_API_KEY)
+client = create_genai_client()
 
-FLASH_TTS_MODEL = "gemini-2.5-flash-preview-tts"
-PRO_TTS_MODEL = "gemini-2.5-pro-preview-tts"
+FLASH_TTS_MODEL = "gemini-2.5-flash-tts"
+PRO_TTS_MODEL = "gemini-2.5-pro-tts"
 QUOTE_PAIRS = [
     ('"', '"'),
     ("'", "'"),
@@ -63,13 +64,13 @@ def _extract_retry_seconds(err: str) -> int | None:
     return int(total)
 
 
-def _resolve_tts_model_candidates() -> list[str]:
+def _resolve_tts_model_candidates(preferred_first: str | None = None) -> list[str]:
     """우선 모델 + 폴백 모델 목록을 구성한다."""
     primary = str(TTS_MODEL_PRIMARY or "").strip() or FLASH_TTS_MODEL
     fallback = str(TTS_MODEL_FALLBACK or "").strip()
 
     models: list[str] = []
-    for m in (primary, fallback):
+    for m in (preferred_first, primary, fallback):
         if m and m not in models:
             models.append(m)
 
@@ -82,14 +83,16 @@ def _resolve_tts_model_candidates() -> list[str]:
 
 def _build_tts_contents(text: str, delivery_instruction: str | None) -> str:
     """TTS 입력 텍스트 구성 (style 지시는 contents로만 전달)."""
-    script = str(text or "").strip()
-    if not script:
+    raw_script = str(text or "")
+    if not raw_script.strip():
         return ""
+    # Trailing spaces are intentionally preserved for narrator ending tests.
+    script = raw_script.strip("\r\n\t")
 
     style_hint = str(delivery_instruction or "").strip()
     if not (TTS_ENABLE_STYLE_STEERING and style_hint):
         return script
-
+    
     # NOTE: preview TTS 모델에서 non-empty system_instruction 사용 시
     # 500 INTERNAL이 반복 재현되어 style 지시는 contents로 전달한다.
     return (
@@ -97,8 +100,8 @@ def _build_tts_contents(text: str, delivery_instruction: str | None) -> str:
         "- Apply style guidance silently.\n"
         "- Never read instruction text.\n"
         "- Speak only the SCRIPT content.\n"
-        "- Articulate Korean syllables, particles, and sentence endings clearly.\n"
-        "- Do not swallow short question endings or final vowels.\n\n"
+        "- Read the SCRIPT exactly once without repeating any word, phrase, or sentence.\n"
+        "\n"
         f"STYLE_GUIDANCE:\n{style_hint}\n\n"
         f"SCRIPT:\n{script}"
     )
@@ -111,7 +114,8 @@ def _fixed_narrator_delivery_hint() -> str:
         "Keep the tone clear, engaging, and easy to follow across all scenes. "
         "Use natural pacing and light emphasis to support tension or payoff, "
         "but do not act as a character, imitate character voices, or overperform emotion. "
-        "Pronounce Korean syllables, particles, and sentence endings fully and clearly."
+        "Pronounce Korean syllables, particles, and sentence endings fully and clearly. "
+        "Finish the last syllable cleanly and do not cut off the sentence ending abruptly."
     )
 
 
@@ -128,11 +132,19 @@ def _strip_outer_quotes_for_tts(text: str, seg_type: str) -> str:
     return script
 
 
+def _apply_narrator_trailing_spaces(text: str) -> str:
+    script = str(text or "").rstrip()
+    if not script or TTS_NARRATOR_TRAILING_SPACES <= 0:
+        return script
+    return script + (" " * TTS_NARRATOR_TRAILING_SPACES)
+
+
 def generate_tts(
     text: str,
     output_path: Path,
     voice_name: str | None = None,
     delivery_instruction: str | None = None,
+    preferred_first_model: str | None = None,
 ) -> dict:
     """텍스트를 Gemini TTS로 음성 변환"""
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -145,7 +157,7 @@ def generate_tts(
     contents = _build_tts_contents(text, delivery_instruction)
 
     # Gemini TTS 사용: 1차 모델 실패 시 폴백 모델로 자동 전환
-    model_candidates = _resolve_tts_model_candidates()
+    model_candidates = _resolve_tts_model_candidates(preferred_first=preferred_first_model)
     max_retries = 6
     base_wait = 20  # 20s, 40s, 80s, 160s, 320s...
     response = None
@@ -161,6 +173,7 @@ def generate_tts(
                     config=types.GenerateContentConfig(
                         response_modalities=["AUDIO"],
                         speech_config=types.SpeechConfig(
+                            language_code=TTS_LANGUAGE_CODE,
                             voice_config=types.VoiceConfig(
                                 prebuilt_voice_config=types.PrebuiltVoiceConfig(
                                     voice_name=voice,
@@ -250,6 +263,7 @@ def generate_tts(
 
     return {
         "audio_path": str(wav_path),
+        "model": model_name,
     }
 
 
@@ -325,6 +339,7 @@ def generate_scene_tts(
 
     vm = voice_map if isinstance(voice_map, dict) else {}
     results = []
+    narrator_model_lock: str | None = None
     for i, scene in enumerate(scenes):
         wav_path = output_dir / f"scene_{i:02d}.wav"
         if wav_path.exists():
@@ -345,12 +360,16 @@ def generate_scene_tts(
                 if speaker == "narrator":
                     delivery_hint = _fixed_narrator_delivery_hint()
                 tts_text = _strip_outer_quotes_for_tts(seg["text"], seg["type"])
+                if speaker == "narrator":
+                    tts_text = _apply_narrator_trailing_spaces(tts_text)
+                preferred_model = narrator_model_lock if speaker == "narrator" else None
                 try:
                     tts_result = generate_tts(
                         tts_text,
                         seg_path,
                         voice_name=voice,
                         delivery_instruction=delivery_hint,
+                        preferred_first_model=preferred_model,
                     )
                 except Exception:
                     if voice != TTS_NARRATOR_VOICE:
@@ -360,15 +379,21 @@ def generate_scene_tts(
                             seg_path,
                             voice_name=voice,
                             delivery_instruction=delivery_hint,
+                            preferred_first_model=preferred_model,
                         )
                     else:
                         raise
+                if speaker == "narrator":
+                    used_model = str(tts_result.get("model", "")).strip()
+                    if used_model == PRO_TTS_MODEL:
+                        narrator_model_lock = used_model
                 partial_wavs.append(Path(tts_result["audio_path"]))
                 segment_meta.append(
                     {
                         "index": j,
                         "speaker": speaker,
                         "voice": voice,
+                        "model": str(tts_result.get("model", "")).strip(),
                         "voice_profile": str(seg.get("voice_profile", "")).strip(),
                         "type": seg["type"],
                         "text": seg["text"],
@@ -391,6 +416,7 @@ def generate_scene_tts(
             )
         else:
             narration = str((scene or {}).get("narration", "")).strip()
+            narration = _apply_narrator_trailing_spaces(narration)
             narrator_voice = str(vm.get("narrator", TTS_NARRATOR_VOICE)).strip() or TTS_NARRATOR_VOICE
             tts_result = generate_tts(
                 narration,
@@ -400,7 +426,11 @@ def generate_scene_tts(
                     "Speak in natural Korean narration style. "
                     "Clear pacing, conversational tone, no exaggerated acting."
                 ),
+                preferred_first_model=narrator_model_lock,
             )
+            used_model = str(tts_result.get("model", "")).strip()
+            if used_model == PRO_TTS_MODEL:
+                narrator_model_lock = used_model
             results.append({"scene_index": i, **tts_result})
             if i < len(scenes) - 1:
                 time.sleep(7)

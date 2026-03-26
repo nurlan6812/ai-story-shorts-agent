@@ -11,7 +11,7 @@ from google.genai import types
 from langchain_core.tools import tool
 from playwright.sync_api import sync_playwright
 
-from config.settings import GEMINI_API_KEY
+from src.genai_client import create_genai_client, has_genai_credentials
 
 _INSTAGRAM_COOKIE_PATH = Path(__file__).resolve().parents[1] / "instagram_state.json"
 _INSTAGRAM_MAX_IMAGES_PER_POST = 4
@@ -98,14 +98,14 @@ JSON만 출력:
 
 
 def _extract_story_with_gemini(keyword: str, caption: str, image_urls: list[str]) -> dict:
-    if not GEMINI_API_KEY:
+    if not has_genai_credentials():
         return {
             "title": "캡션 기반 추출",
             "story": caption[:600] if caption else "",
             "ocr_text": "",
         }
 
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    client = create_genai_client()
     prompt = _build_instagram_story_prompt(keyword)
 
     content = [prompt]

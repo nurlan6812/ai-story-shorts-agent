@@ -3,9 +3,8 @@
 import re
 import time
 from pathlib import Path
-from google import genai
 from google.genai import types
-from config.settings import GEMINI_API_KEY
+from src.genai_client import create_genai_client
 
 # 재시도 설정
 MAX_RETRIES = 10
@@ -18,8 +17,7 @@ _gemini_client = None
 def _get_gemini_client():
     global _gemini_client
     if _gemini_client is None:
-        _gemini_client = genai.Client(
-            api_key=GEMINI_API_KEY,
+        _gemini_client = create_genai_client(
             http_options=types.HttpOptions(timeout=IMAGE_REQUEST_TIMEOUT_MS),
         )
     return _gemini_client

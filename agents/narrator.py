@@ -2,12 +2,11 @@
 
 import json
 import re
-from google import genai
-from config.settings import GEMINI_API_KEY
+from src.genai_client import create_genai_client
 from tools.style_manager import list_styles, load_style
 from tools.performance_feedback import build_narrator_feedback_block
 
-client = genai.Client(api_key=GEMINI_API_KEY)
+client = create_genai_client()
 MODEL = "gemini-3.1-pro-preview"
 MAX_RETRIES = 5
 MIN_SCENES = 6

@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
+from dotenv import dotenv_values
 
 from settings import (
     CAFFEINATE_BIN,
@@ -24,14 +25,14 @@ from settings import (
 router = APIRouter()
 
 KST = timezone(timedelta(hours=9))
-MAIN_SLOTS = [(6, 30), (12, 30), (18, 30)]
+MAIN_SLOTS = [(6, 30), (11, 30), (18, 30)]
 RECOVERY_SLOTS = [
     (7, 30),
     (8, 30),
     (9, 30),
+    (12, 30),
     (13, 30),
     (14, 30),
-    (15, 30),
     (19, 30),
     (20, 30),
     (21, 30),
@@ -50,6 +51,25 @@ TARGETS = {
         "log_path": RECOVERY_SCHEDULER_LOG_PATH,
         "schedule_slots": RECOVERY_SLOTS,
     },
+}
+
+MANAGED_ENV_PREFIXES = (
+    "GEMINI_",
+    "VERTEX_",
+    "GOOGLE_",
+    "PEXELS_",
+    "TAVILY_",
+    "REDDIT_",
+    "YOUTUBE_",
+    "SUPABASE_",
+    "TTS_",
+    "BGM_",
+    "IMAGE_",
+)
+
+MANAGED_ENV_KEYS = {
+    "MAX_DAILY_UPLOADS",
+    "AI_DISCLOSURE",
 }
 
 
@@ -194,6 +214,29 @@ def _start_command(target: str) -> list[str]:
     return [str(VENV_PYTHON), str(config["script"])]
 
 
+def _build_scheduler_env() -> dict[str, str]:
+    """스케줄러 자식 프로세스용 환경변수 정리.
+
+    대시보드 API가 오래 살아 있으면 예전 프로젝트/키 값이 부모 env에 남을 수 있다.
+    충돌 가능성이 큰 GenAI/GCP 관련 값은 부모 env에서 제거한 뒤, 프로젝트 루트 .env 값을
+    다시 입혀서 스케줄러 자식에게 넘긴다.
+    """
+    env = os.environ.copy()
+
+    for key in list(env.keys()):
+        if key.startswith(MANAGED_ENV_PREFIXES) or key in MANAGED_ENV_KEYS:
+            env.pop(key, None)
+
+    dotenv_path = PROJECT_ROOT / ".env"
+    if dotenv_path.exists():
+        for key, value in dotenv_values(dotenv_path).items():
+            if value is None:
+                continue
+            env[str(key)] = str(value)
+
+    return env
+
+
 def _start_target(target: str) -> dict:
     config = _target_config(target)
     processes = _find_processes_for_target(target)
@@ -208,6 +251,7 @@ def _start_target(target: str) -> dict:
         proc = subprocess.Popen(
             _start_command(target),
             cwd=str(PROJECT_ROOT),
+            env=_build_scheduler_env(),
             stdin=subprocess.DEVNULL,
             stdout=log_file,
             stderr=subprocess.STDOUT,

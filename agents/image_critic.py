@@ -8,11 +8,10 @@ import time
 from pathlib import Path
 
 from PIL import Image
-from google import genai
 
-from config.settings import GEMINI_API_KEY
+from src.genai_client import create_genai_client
 
-client = genai.Client(api_key=GEMINI_API_KEY)
+client = create_genai_client()
 MODEL = "gemini-3.1-pro-preview"
 MAX_RETRIES = 3
 BASE_RETRY_DELAY = 5

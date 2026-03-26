@@ -3,9 +3,7 @@
 import json
 import time
 
-from google import genai
-
-from config.settings import GEMINI_API_KEY
+from src.genai_client import create_genai_client, has_genai_credentials
 
 MODEL = "gemini-3.1-pro-preview"
 MAX_RETRIES = 5
@@ -44,8 +42,8 @@ def select_reference_scenes(
         return {"refs": {}, "notes": {}}
 
     max_refs = max(1, min(max_refs, 3))
-    if not GEMINI_API_KEY:
-        raise RuntimeError("GEMINI_API_KEY가 없어 reference selector를 실행할 수 없습니다. (폴백 없음)")
+    if not has_genai_credentials():
+        raise RuntimeError("Gemini/Vertex credential이 없어 reference selector를 실행할 수 없습니다. (폴백 없음)")
 
     scene_lines = []
     for i, s in enumerate(scenes):
@@ -96,7 +94,7 @@ def select_reference_scenes(
   ]
 }}
 """
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    client = create_genai_client()
     retry_prompt = prompt
     last_error = ""
     for attempt in range(1, MAX_RETRIES + 1):
@@ -199,8 +197,10 @@ def select_references_unified(
     max_in_episode_refs = max(1, min(max_in_episode_refs, 3))
     max_previous_part_refs = max(1, min(max_previous_part_refs, 2))
     has_prev = bool(previous_part_scenes)
-    if not GEMINI_API_KEY:
-        raise RuntimeError("GEMINI_API_KEY가 없어 unified reference selector를 실행할 수 없습니다. (폴백 없음)")
+    if not has_genai_credentials():
+        raise RuntimeError(
+            "Gemini/Vertex credential이 없어 unified reference selector를 실행할 수 없습니다. (폴백 없음)"
+        )
 
     current_lines = []
     for i, s in enumerate(current_scenes):
@@ -275,7 +275,7 @@ def select_references_unified(
 }}
 """
 
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    client = create_genai_client()
     retry_prompt = prompt
     last_error = ""
     for attempt in range(1, MAX_RETRIES + 1):

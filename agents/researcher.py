@@ -2,13 +2,12 @@
 
 import json
 from urllib.parse import urldefrag
-from google import genai
 from google.genai import types
-from config.settings import GEMINI_API_KEY
+from src.genai_client import create_genai_client
 from tools.content_fetcher import crawl_article
 from tools.web_search import search_web
 
-client = genai.Client(api_key=GEMINI_API_KEY)
+client = create_genai_client()
 MODEL = "gemini-3.1-pro-preview"
 
 ALL_TOOLS = [search_web, crawl_article]

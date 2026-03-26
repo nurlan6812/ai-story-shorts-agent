@@ -5,11 +5,10 @@ Gemini는 계산된 통계를 해석/판단만 합니다.
 """
 
 import json
-from google import genai
-from config.settings import GEMINI_API_KEY
+from src.genai_client import create_genai_client
 from tools.stats_engine import precompute_stats
 
-client = genai.Client(api_key=GEMINI_API_KEY)
+client = create_genai_client()
 MODEL = "gemini-3.1-pro-preview"
 
 

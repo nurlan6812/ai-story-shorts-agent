@@ -2,10 +2,10 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+BASE_DIR = Path(__file__).parent.parent
+load_dotenv(BASE_DIR / ".env", override=True)
 
 # Paths
-BASE_DIR = Path(__file__).parent.parent
 ASSETS_DIR = BASE_DIR / "assets"
 EFFECTS_DIR = ASSETS_DIR / "effects"
 SAFE_BGM_DIR = ASSETS_DIR / "bgm_safe" / "youtube_audio_library"
@@ -21,8 +21,12 @@ STYLES_DIR = BASE_DIR / "styles"
 OUTPUT_DIR = BASE_DIR / "output"
 UPLOAD_QUEUE_DIR = OUTPUT_DIR / "upload_queue"
 
+# Google Cloud / Vertex AI
+GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT", "").strip()
+GOOGLE_CLOUD_LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "global").strip() or "global"
+
 # API Keys
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
 # Web Search
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
@@ -51,8 +55,12 @@ VIDEO_FPS = 30
 # TTS settings (Gemini TTS)
 TTS_VOICE = "Schedar"  # Voice 07
 TTS_SPEED = 1.25  # 나레이션 배속 (유머/썰은 좀 더 자연스러운 속도)
-TTS_MODEL_PRIMARY = os.getenv("TTS_MODEL_PRIMARY", "gemini-2.5-pro-preview-tts")
-TTS_MODEL_FALLBACK = os.getenv("TTS_MODEL_FALLBACK", "gemini-2.5-flash-preview-tts")
+TTS_LANGUAGE_CODE = os.getenv("TTS_LANGUAGE_CODE", "ko-KR").strip() or "ko-KR"
+TTS_MODEL_PRIMARY = os.getenv("TTS_MODEL_PRIMARY", "gemini-2.5-flash-tts")
+TTS_MODEL_FALLBACK = os.getenv("TTS_MODEL_FALLBACK", "gemini-2.5-pro-tts")
+TTS_NARRATOR_TRAILING_SPACES = max(
+    0, int(os.getenv("TTS_NARRATOR_TRAILING_SPACES", "0").strip() or "0")
+)
 
 # TTS voice mapping (speaker profile based)
 TTS_NARRATOR_VOICE = os.getenv("TTS_NARRATOR_VOICE", TTS_VOICE)

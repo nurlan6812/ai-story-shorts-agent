@@ -1,6 +1,6 @@
 """스케줄러 공통 작업 함수.
 
-- 메인 스케줄러: 정규 슬롯(06:30/12:30/18:30) 생성 담당
+- 메인 스케줄러: 정규 슬롯(06:30/11:30/18:30) 생성 담당
 - 복구 스케줄러: 반시 결과 점검 후 누락 슬롯 재시도 담당
 
 같은 슬롯을 두 프로세스가 동시에 생성하지 않도록 slot_key 기반 파일 락을 사용한다.
@@ -21,7 +21,7 @@ from pathlib import Path
 log = logging.getLogger("scheduler.jobs")
 
 KST = timezone(timedelta(hours=9))
-GENERATE_HOURS = (6, 12, 18)
+GENERATE_HOURS = (6, 11, 18)
 GENERATE_MINUTE = 30
 SLOT_CHECK_START_HOURS = 1
 SLOT_CHECK_MAX_COUNT = 3

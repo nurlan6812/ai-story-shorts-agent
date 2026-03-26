@@ -1,12 +1,11 @@
 """Director Agent - Gemini 기반 크리에이티브 디렉터 (구조/씬 설계 전용)"""
 
 import json
-from google import genai
-from config.settings import GEMINI_API_KEY
+from src.genai_client import create_genai_client
 from tools.performance_feedback import build_director_feedback_block
 from tools.style_manager import load_style, list_styles
 
-client = genai.Client(api_key=GEMINI_API_KEY)
+client = create_genai_client()
 MODEL = "gemini-3.1-pro-preview"
 
 # BGM 설명 (assets/bgm/ 파일 기반)

@@ -5,7 +5,7 @@
     python scheduler.py --once    # 1회 실행 후 종료
 
 스케줄:
-    - 06:30, 12:30, 18:30 KST: 영상 생성 + 업로드
+    - 06:30, 11:30, 18:30 KST: 영상 생성 + 업로드
     - 6시간마다: 48시간+ 영상 애널리틱스 수집
     - 00:00 KST: 전체 성과 분석 + 패턴 업데이트
     - 1시간마다: 헬스 체크
@@ -273,10 +273,10 @@ def create_scheduler() -> BlockingScheduler:
     """APScheduler 설정 및 작업 등록"""
     scheduler = BlockingScheduler(timezone="Asia/Seoul")
 
-    # 영상 생성+업로드: 06:30, 12:30, 18:30 KST
+    # 영상 생성+업로드: 06:30, 11:30, 18:30 KST
     scheduler.add_job(
         job_generate_and_upload,
-        CronTrigger(hour="6,12,18", minute=30, timezone="Asia/Seoul"),
+        CronTrigger(hour="6,11,18", minute=30, timezone="Asia/Seoul"),
         id="generate_and_upload",
         name="영상 생성+업로드",
         max_instances=1,
@@ -345,7 +345,7 @@ def main():
 
     log.info("=== 썰알람 YouTube Shorts 메인 스케줄러 시작 ===")
     log.info("스케줄:")
-    log.info("  - 영상 생성+업로드: 06:30, 12:30, 18:30 KST")
+    log.info("  - 영상 생성+업로드: 06:30, 11:30, 18:30 KST")
     log.info("  - 애널리틱스 수집: 6시간마다")
     log.info("  - 성과 분석: 매일 00:00 KST")
     log.info("  - 헬스 체크: 1시간마다")

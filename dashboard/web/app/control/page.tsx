@@ -36,12 +36,12 @@ export default function ControlPage() {
         <SchedulerControl
           target="main"
           title="메인 스케줄러"
-          description="정규 슬롯 06:30, 12:30, 18:30에 영상 생성과 업로드를 담당합니다."
+          description="정규 슬롯 06:30, 11:30, 18:30에 영상 생성과 업로드를 담당합니다."
         />
         <SchedulerControl
           target="recovery"
           title="복구 스케줄러"
-          description="07:30~09:30, 13:30~15:30, 19:30~21:30에 누락 슬롯을 점검합니다."
+          description="07:30~09:30, 12:30~14:30, 19:30~21:30에 누락 슬롯을 점검합니다."
         />
         <ManualGenerate />
       </div>

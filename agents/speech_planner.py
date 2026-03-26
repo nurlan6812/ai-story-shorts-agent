@@ -4,9 +4,7 @@ import json
 import re
 from typing import Any
 
-from google import genai
 from config.settings import (
-    GEMINI_API_KEY,
     TTS_NARRATOR_VOICE,
     TTS_MALE_VOICE,
     TTS_FEMALE_VOICE,
@@ -15,10 +13,11 @@ from config.settings import (
     TTS_ELDER_MALE_VOICE,
     TTS_ELDER_FEMALE_VOICE,
 )
+from src.genai_client import create_genai_client, has_genai_credentials
 
 MODEL = "gemini-3.1-pro-preview"
 MAX_LLM_RETRIES = 4
-client = genai.Client(api_key=GEMINI_API_KEY)
+client = create_genai_client()
 
 # 보이스 정책
 VOICE_NARRATOR = TTS_NARRATOR_VOICE
@@ -191,8 +190,10 @@ def _split_all_scenes_speech_with_llm(
     scenes: list[dict],
     character_index: dict[str, dict],
 ) -> tuple[dict[int, list[dict]], str]:
-    if not GEMINI_API_KEY:
-        raise RuntimeError("Speech Planner requires GEMINI_API_KEY for LLM-only segmentation.")
+    if not has_genai_credentials():
+        raise RuntimeError(
+            "Speech Planner requires a configured Gemini/Vertex credential for LLM-only segmentation."
+        )
 
     characters = sorted(character_index.keys())
     allowed_speakers = ["narrator", *characters]
